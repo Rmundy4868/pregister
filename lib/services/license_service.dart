@@ -125,29 +125,31 @@ class LicenseService {
   static const _spinAuthKeyStorageKey = 'app_spin_auth_key';
   static LicenseContext? _activeContext;
 
+  static const _licenseRecognizedButOrgHiddenMessage =
+      'License key is recognized by the server, but organization lookup data is unavailable in this environment. Enter organization number and continue, or verify this install points to the correct Supabase project.';
+
   String _canonicalLicenseValue(String value) {
-    return value
-        .trim()
-        .toLowerCase()
-        .replaceAll(RegExp(r'[^a-z0-9]'), '');
+    return value.trim().toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
   }
 
   Future<List<Map<String, dynamic>>> _fetchOrganizationsForLookup() async {
     try {
-      final rpcRows = await SupabaseService.client.rpc('list_organizations_from_app');
+      final rpcRows = await SupabaseService.client.rpc(
+        'list_organizations_from_app',
+      );
       if (rpcRows is List) {
         return rpcRows
             .map((row) => Map<String, dynamic>.from(row as Map))
             .toList();
       }
-    } catch (_) {
-    }
+    } catch (_) {}
 
     try {
-      final rows = await SupabaseService.client.from('organizations').select('*');
+      final rows = await SupabaseService.client
+          .from('organizations')
+          .select('*');
       return rows.map((row) => Map<String, dynamic>.from(row as Map)).toList();
-    } catch (_) {
-    }
+    } catch (_) {}
 
     return const [];
   }
@@ -182,8 +184,7 @@ class LicenseService {
         final orgNumber = row['organization_number']?.toString().trim() ?? '';
         if (orgNumber.isNotEmpty) return orgNumber;
       }
-    } catch (_) {
-    }
+    } catch (_) {}
 
     return null;
   }
@@ -199,13 +200,19 @@ class LicenseService {
       );
       if (response is! List) return const [];
 
-      final names = response
-          .map((row) =>
-              Map<String, dynamic>.from(row as Map)['location_name']?.toString().trim() ?? '')
-          .where((value) => value.isNotEmpty)
-          .toSet()
-          .toList()
-        ..sort();
+      final names =
+          response
+              .map(
+                (row) =>
+                    Map<String, dynamic>.from(
+                      row as Map,
+                    )['location_name']?.toString().trim() ??
+                    '',
+              )
+              .where((value) => value.isNotEmpty)
+              .toSet()
+              .toList()
+            ..sort();
 
       return names;
     } catch (_) {
@@ -333,7 +340,9 @@ class LicenseService {
   String _generateDeviceId() {
     final random = Random.secure();
     final bytes = List<int>.generate(16, (_) => random.nextInt(256));
-    final hex = bytes.map((value) => value.toRadixString(16).padLeft(2, '0')).join();
+    final hex = bytes
+        .map((value) => value.toRadixString(16).padLeft(2, '0'))
+        .join();
     return [
       hex.substring(0, 8),
       hex.substring(8, 12),
@@ -383,7 +392,10 @@ class LicenseService {
     if (defineDeviceId.isNotEmpty) {
       await prefs.setString(_deviceIdStorageKey, defineDeviceId);
       if (defineDeviceLabel.isEmpty) {
-        await prefs.setString(_deviceLabelStorageKey, _defaultDeviceLabel(defineDeviceId));
+        await prefs.setString(
+          _deviceLabelStorageKey,
+          _defaultDeviceLabel(defineDeviceId),
+        );
       }
     }
 
@@ -392,7 +404,9 @@ class LicenseService {
     }
   }
 
-  Future<List<Map<String, String>>> fetchLocationOptionsForLicense(String rawLicenseKey) async {
+  Future<List<Map<String, String>>> fetchLocationOptionsForLicense(
+    String rawLicenseKey,
+  ) async {
     final licenseKey = rawLicenseKey.trim();
     if (licenseKey.isEmpty) return const [];
 
@@ -433,7 +447,10 @@ class LicenseService {
 
   Future<List<String>> fetchLocationsForLicense(String rawLicenseKey) async {
     final options = await fetchLocationOptionsForLicense(rawLicenseKey);
-    return options.map((option) => option['name'] ?? '').where((name) => name.isNotEmpty).toList();
+    return options
+        .map((option) => option['name'] ?? '')
+        .where((name) => name.isNotEmpty)
+        .toList();
   }
 
   Future<List<String>> fetchTerminalsForLicense({
@@ -449,7 +466,8 @@ class LicenseService {
         'list_terminals_for_license',
         params: {
           'p_license_key': licenseKey,
-          if (normalizedLocation.isNotEmpty) 'p_location_name': normalizedLocation,
+          if (normalizedLocation.isNotEmpty)
+            'p_location_name': normalizedLocation,
         },
       );
 
@@ -462,19 +480,27 @@ class LicenseService {
           'list_terminals_for_license',
           params: {
             'p_license_key': licenseKey,
-            if (normalizedLocation.isNotEmpty) 'p_location_name': normalizedLocation,
+            if (normalizedLocation.isNotEmpty)
+              'p_location_name': normalizedLocation,
           },
         );
       }
 
       if (response is! List) return const ['0001'];
 
-      final numbers = response
-          .map((row) => Map<String, dynamic>.from(row as Map)['terminal_number']?.toString().trim() ?? '')
-          .where((value) => value.isNotEmpty)
-          .toSet()
-          .toList()
-        ..sort();
+      final numbers =
+          response
+              .map(
+                (row) =>
+                    Map<String, dynamic>.from(
+                      row as Map,
+                    )['terminal_number']?.toString().trim() ??
+                    '',
+              )
+              .where((value) => value.isNotEmpty)
+              .toSet()
+              .toList()
+            ..sort();
 
       if (numbers.isEmpty) return const ['0001'];
       return numbers;
@@ -496,18 +522,26 @@ class LicenseService {
           .eq('organization_id', normalizedOrganizationId)
           .limit(500);
 
-      final names = rows
-          .map((row) => Map<String, dynamic>.from(row as Map)['name']?.toString().trim() ?? '')
-          .where((value) => value.isNotEmpty)
-          .toSet()
-          .toList()
-        ..sort();
+      final names =
+          rows
+              .map(
+                (row) =>
+                    Map<String, dynamic>.from(
+                      row as Map,
+                    )['name']?.toString().trim() ??
+                    '',
+              )
+              .where((value) => value.isNotEmpty)
+              .toSet()
+              .toList()
+            ..sort();
 
       if (names.isNotEmpty) return names;
-    } catch (_) {
-    }
+    } catch (_) {}
 
-    final lookupKey = await _organizationLookupKeyById(normalizedOrganizationId);
+    final lookupKey = await _organizationLookupKeyById(
+      normalizedOrganizationId,
+    );
     if (lookupKey == null || lookupKey.isEmpty) return const [];
     return _fetchLocationsViaLookupKey(lookupKey);
   }
@@ -530,7 +564,9 @@ class LicenseService {
       });
     } catch (_) {
       // Try the app-safe RPC when direct insert fails (for example due to RLS).
-      final lookupKey = await _organizationLookupKeyById(normalizedOrganizationId);
+      final lookupKey = await _organizationLookupKeyById(
+        normalizedOrganizationId,
+      );
       if (lookupKey != null && lookupKey.isNotEmpty) {
         try {
           await SupabaseService.client.rpc(
@@ -570,7 +606,9 @@ class LicenseService {
             .limit(1);
 
         if (locationRows.isNotEmpty) {
-          locationId = Map<String, dynamic>.from(locationRows.first as Map)['id']?.toString();
+          locationId = Map<String, dynamic>.from(
+            locationRows.first as Map,
+          )['id']?.toString();
         }
       }
 
@@ -584,13 +622,19 @@ class LicenseService {
       }
 
       final rows = await query.limit(500);
-      final numbers = rows
-          .map((row) =>
-              Map<String, dynamic>.from(row as Map)['terminal_number']?.toString().trim() ?? '')
-          .where((value) => value.isNotEmpty)
-          .toSet()
-          .toList()
-        ..sort();
+      final numbers =
+          rows
+              .map(
+                (row) =>
+                    Map<String, dynamic>.from(
+                      row as Map,
+                    )['terminal_number']?.toString().trim() ??
+                    '',
+              )
+              .where((value) => value.isNotEmpty)
+              .toSet()
+              .toList()
+            ..sort();
 
       if (numbers.isEmpty) return const ['0001'];
       return numbers;
@@ -609,7 +653,8 @@ class LicenseService {
 
     // Use list_terminals_from_app RPC — anon-callable, bypasses RLS.
     // We need the license key, which we can get from stored/define.
-    final licenseKey = (await getStoredLicenseKey() ?? SupabaseConfig.appLicenseKey).trim();
+    final licenseKey =
+        (await getStoredLicenseKey() ?? SupabaseConfig.appLicenseKey).trim();
     if (licenseKey.isEmpty) return false;
 
     try {
@@ -623,9 +668,11 @@ class LicenseService {
       );
       if (rows is! List) return false;
       return rows.any((row) {
-        final num = Map<String, dynamic>.from(row as Map)['terminal_number']
-            ?.toString()
-            .trim() ?? '';
+        final num =
+            Map<String, dynamic>.from(
+              row as Map,
+            )['terminal_number']?.toString().trim() ??
+            '';
         return num == normalizedTerminalNumber;
       });
     } catch (_) {
@@ -651,10 +698,13 @@ class LicenseService {
     try {
       final allOrgs = await _fetchOrganizationsForLookup();
       final rows = allOrgs
-        .where((organization) =>
-          (organization['organization_number']?.toString().trim() ?? '') ==
-          normalizedOrganizationNumber)
-        .toList();
+          .where(
+            (organization) =>
+                (organization['organization_number']?.toString().trim() ??
+                    '') ==
+                normalizedOrganizationNumber,
+          )
+          .toList();
 
       if (rows.isEmpty) {
         return const OrganizationLookupResult(
@@ -688,7 +738,8 @@ class LicenseService {
       return OrganizationLookupResult(
         found: true,
         organizationId: organization['id']?.toString() ?? '',
-        organizationNumber: organization['organization_number']?.toString() ?? '',
+        organizationNumber:
+            organization['organization_number']?.toString() ?? '',
         organizationName: organization['name']?.toString() ?? '',
       );
     } catch (error) {
@@ -731,6 +782,22 @@ class LicenseService {
       }).firstOrNull;
 
       if (match == null) {
+        final backendRecognized = await _isLicenseRecognizedByBackend(
+          normalized,
+        );
+        if (backendRecognized) {
+          final fields = <String, String>{};
+          if (RegExp(r'^[0-9]{6}$').hasMatch(normalized)) {
+            fields['organization_number'] = normalized;
+          }
+          return OrganizationFieldsResult(
+            found: fields.isNotEmpty,
+            fields: fields,
+            errorMessage: fields.isEmpty
+                ? _licenseRecognizedButOrgHiddenMessage
+                : null,
+          );
+        }
         return const OrganizationFieldsResult(
           found: false,
           errorMessage: 'No organization found with this license key.',
@@ -752,6 +819,51 @@ class LicenseService {
     }
   }
 
+  Future<bool> _isLicenseRecognizedByBackend(String licenseKey) async {
+    final normalized = licenseKey.trim();
+    if (normalized.isEmpty) return false;
+
+    try {
+      final response = await SupabaseService.client.rpc(
+        'list_locations_for_license',
+        params: {'p_license_key': normalized},
+      );
+      if (response is List && response.isNotEmpty) {
+        return true;
+      }
+    } catch (_) {
+      // Fall through to activation probe for older/missing lookup RPCs.
+    }
+
+    try {
+      final response = await SupabaseService.client.rpc(
+        'activate_install_license',
+        params: {
+          'p_license_key': normalized,
+          'p_terminal_number': '0001',
+          'p_location_name': '',
+          'p_allow_register': false,
+        },
+      );
+      if (response is List && response.isNotEmpty) {
+        return true;
+      }
+    } catch (error) {
+      final text = error.toString().toLowerCase();
+      if (text.contains('no terminal is registered to this device') ||
+          text.contains('terminal is not registered') ||
+          text.contains('terminal 0001 is inactive') ||
+          text.contains('is inactive')) {
+        return true;
+      }
+      if (text.contains('invalid license key')) {
+        return false;
+      }
+    }
+
+    return false;
+  }
+
   Future<void> _ensureDefaultsForSelectors({
     required String licenseKey,
     String locationName = '',
@@ -765,8 +877,7 @@ class LicenseService {
           'p_location_name': locationName.trim(),
         },
       );
-    } catch (_) {
-    }
+    } catch (_) {}
   }
 
   Future<LicenseActivationResult> initializeFromStoredOrDefine() async {
@@ -789,8 +900,10 @@ class LicenseService {
 
     // Restore payment credentials that were persisted (non-token activation path)
     final credsPrefs = await SharedPreferences.getInstance();
-    final storedSpinTpn = credsPrefs.getString(_spinTpnStorageKey)?.trim() ?? '';
-    final storedSpinAuthKey = credsPrefs.getString(_spinAuthKeyStorageKey)?.trim() ?? '';
+    final storedSpinTpn =
+        credsPrefs.getString(_spinTpnStorageKey)?.trim() ?? '';
+    final storedSpinAuthKey =
+        credsPrefs.getString(_spinAuthKeyStorageKey)?.trim() ?? '';
     if (storedSpinTpn.isNotEmpty || storedSpinAuthKey.isNotEmpty) {
       TerminalConfig.applyFromTerminalRecord(
         spinTpn: storedSpinTpn,
@@ -811,22 +924,27 @@ class LicenseService {
     final storedKey = await getStoredLicenseKey();
     final storedTerminal = await getStoredTerminalNumber();
     final storedLocation = await getStoredLocationName();
-    final licenseKeyToUse = defineKey.isNotEmpty ? defineKey : (storedKey ?? '');
+    final licenseKeyToUse = defineKey.isNotEmpty
+        ? defineKey
+        : (storedKey ?? '');
     final terminalNumberToUse = defineTerminal.isNotEmpty
         ? defineTerminal
         : (storedTerminal?.isNotEmpty == true ? storedTerminal! : '0001');
     final locationNameToUse = defineLocation.isNotEmpty
-      ? defineLocation
-      : (storedLocation ?? '');
+        ? defineLocation
+        : (storedLocation ?? '');
     // Launcher-provided identity should be allowed to bind this machine on first run.
     final allowRegisterFromStartupDefines =
-      defineKey.isNotEmpty || defineTerminal.isNotEmpty || defineLocation.isNotEmpty;
+        defineKey.isNotEmpty ||
+        defineTerminal.isNotEmpty ||
+        defineLocation.isNotEmpty;
 
     if (licenseKeyToUse.isEmpty) {
       return LicenseActivationResult(
         success: false,
         requiresInput: true,
-        errorMessage: 'Enter your application license key to activate this install.',
+        errorMessage:
+            'Enter your application license key to activate this install.',
         attemptedTerminalNumber: terminalNumberToUse,
       );
     }
@@ -860,7 +978,10 @@ class LicenseService {
     );
 
     if (rpcResult.context == null) {
-      return const LicenseActivationResult(success: false, requiresInput: false);
+      return const LicenseActivationResult(
+        success: false,
+        requiresInput: false,
+      );
     }
 
     final context = rpcResult.context!;
@@ -907,8 +1028,8 @@ class LicenseService {
     final licenseKey = rawLicenseKey.trim();
     final resolvedTerminalNumber =
         (terminalNumber ?? SupabaseConfig.terminalNumber).trim().isNotEmpty
-            ? (terminalNumber ?? SupabaseConfig.terminalNumber).trim()
-            : '0001';
+        ? (terminalNumber ?? SupabaseConfig.terminalNumber).trim()
+        : '0001';
     final resolvedLocationName = (locationName ?? '').trim();
     if (licenseKey.isEmpty) {
       return LicenseActivationResult(
@@ -999,7 +1120,7 @@ class LicenseService {
           attemptedLicenseKey: licenseKey,
           attemptedTerminalNumber: resolvedTerminalNumber,
           attemptedLocationName: resolvedLocationName,
-            requiresTerminalRegistration: rpcResult.requiresTerminalRegistration,
+          requiresTerminalRegistration: rpcResult.requiresTerminalRegistration,
           errorMessage: rpcResult.error != null
               ? 'License activation RPC failed: ${rpcResult.error}. Fallback read failed: $error'
               : 'License activation failed: $error',
@@ -1013,9 +1134,10 @@ class LicenseService {
           attemptedLicenseKey: licenseKey,
           attemptedTerminalNumber: resolvedTerminalNumber,
           attemptedLocationName: resolvedLocationName,
-            requiresTerminalRegistration: rpcResult.requiresTerminalRegistration,
+          requiresTerminalRegistration: rpcResult.requiresTerminalRegistration,
           errorMessage:
-              'License activation RPC failed: ${rpcResult.error}. ${legacyResult.errorMessage ?? ''}'.trim(),
+              'License activation RPC failed: ${rpcResult.error}. ${legacyResult.errorMessage ?? ''}'
+                  .trim(),
         );
       }
 
@@ -1098,7 +1220,8 @@ class LicenseService {
 
       if (response is! List || response.isEmpty) {
         return const _RpcActivationResult(
-          error: 'RPC returned no rows. Run updated license_setup.sql and verify organization license key.',
+          error:
+              'RPC returned no rows. Run updated license_setup.sql and verify organization license key.',
         );
       }
 
@@ -1110,11 +1233,12 @@ class LicenseService {
       );
       final spinTpn = row['spin_tpn']?.toString().trim() ?? '';
       final spinAuthKey = row['spin_auth_key']?.toString().trim() ?? '';
-        final cardReaderType = row['card_reader_type']?.toString().trim() ?? '';
-        final cardReaderHppAuthToken =
+      final cardReaderType = row['card_reader_type']?.toString().trim() ?? '';
+      final cardReaderHppAuthToken =
           row['card_reader_hpp_auth_token']?.toString().trim() ?? '';
       final defaultStaffId = row['default_staff_id']?.toString().trim() ?? '';
-      final defaultStaffName = row['default_staff_name']?.toString().trim() ?? '';
+      final defaultStaffName =
+          row['default_staff_name']?.toString().trim() ?? '';
 
       if (context == null) {
         return const _RpcActivationResult(
@@ -1153,14 +1277,13 @@ class LicenseService {
     try {
       final response = await SupabaseService.client.rpc(
         'resolve_install_from_device',
-        params: {
-          'p_device_id': deviceId,
-          'p_device_label': deviceLabel,
-        },
+        params: {'p_device_id': deviceId, 'p_device_label': deviceLabel},
       );
 
       if (response is! List || response.isEmpty) {
-        return const _RpcActivationResult(error: 'No terminal registered for this device.');
+        return const _RpcActivationResult(
+          error: 'No terminal registered for this device.',
+        );
       }
 
       final row = Map<String, dynamic>.from(response.first as Map);
@@ -1181,7 +1304,9 @@ class LicenseService {
       );
     } catch (_) {
       // RPC may not exist on older schema versions.
-      return const _RpcActivationResult(error: 'Device bootstrap RPC unavailable.');
+      return const _RpcActivationResult(
+        error: 'Device bootstrap RPC unavailable.',
+      );
     }
   }
 
@@ -1205,10 +1330,9 @@ class LicenseService {
         int.tryParse((row['terminal_licenses'] ?? '').toString()) ?? 0;
     final terminalsActive =
         int.tryParse((row['terminals_active'] ?? '').toString()) ?? 0;
-    final licenseKey =
-        (row['license_key']?.toString() ?? '').trim().isNotEmpty
-            ? row['license_key']!.toString().trim()
-            : fallbackLicenseKey;
+    final licenseKey = (row['license_key']?.toString() ?? '').trim().isNotEmpty
+        ? row['license_key']!.toString().trim()
+        : fallbackLicenseKey;
 
     if (organizationId.isEmpty ||
         organizationNumber.isEmpty ||
@@ -1260,7 +1384,8 @@ class LicenseService {
     }
 
     final organizationId = organization['id']?.toString() ?? '';
-    final organizationNumber = organization['organization_number']?.toString() ?? '';
+    final organizationNumber =
+        organization['organization_number']?.toString() ?? '';
     if (organizationId.isEmpty || organizationNumber.isEmpty) {
       return const LicenseActivationResult(
         success: false,
@@ -1307,11 +1432,13 @@ class LicenseService {
             .eq('id', resolvedLocationId)
             .limit(1);
         if (locationRows.isNotEmpty) {
-          final locationRow = Map<String, dynamic>.from(locationRows.first as Map);
-          resolvedLocationName = locationRow['name']?.toString() ?? resolvedLocationName;
+          final locationRow = Map<String, dynamic>.from(
+            locationRows.first as Map,
+          );
+          resolvedLocationName =
+              locationRow['name']?.toString() ?? resolvedLocationName;
         }
-      } catch (_) {
-      }
+      } catch (_) {}
     }
 
     _activeContext = LicenseContext(
@@ -1347,8 +1474,12 @@ class LicenseService {
         row['organization_number']?.toString(),
       ];
 
-      final matched = candidates.any((value) =>
-          value != null && value.trim().isNotEmpty && value.trim() == licenseKey);
+      final matched = candidates.any(
+        (value) =>
+            value != null &&
+            value.trim().isNotEmpty &&
+            value.trim() == licenseKey,
+      );
       if (matched) return row;
     }
     return null;
@@ -1373,7 +1504,9 @@ class LicenseService {
       if (filteredLocations.isEmpty) {
         return null;
       }
-      locationId = Map<String, dynamic>.from(filteredLocations.first as Map)['id']?.toString();
+      locationId = Map<String, dynamic>.from(
+        filteredLocations.first as Map,
+      )['id']?.toString();
     }
 
     final existingQuery = client
@@ -1392,13 +1525,13 @@ class LicenseService {
 
     final locations = locationId != null && locationId.isNotEmpty
         ? [
-            {'id': locationId}
+            {'id': locationId},
           ]
         : await client
-            .from('locations')
-            .select('id')
-            .eq('organization_id', organizationId)
-            .limit(1);
+              .from('locations')
+              .select('id')
+              .eq('organization_id', organizationId)
+              .limit(1);
 
     List<dynamic> effectiveLocations = locations;
     if (effectiveLocations.isEmpty) {
@@ -1415,8 +1548,9 @@ class LicenseService {
 
     if (effectiveLocations.isEmpty) return null;
 
-    final resolvedLocationId =
-        Map<String, dynamic>.from(effectiveLocations.first as Map)['id']?.toString();
+    final resolvedLocationId = Map<String, dynamic>.from(
+      effectiveLocations.first as Map,
+    )['id']?.toString();
     if (resolvedLocationId == null || resolvedLocationId.isEmpty) return null;
 
     final payload = <String, dynamic>{
@@ -1462,7 +1596,8 @@ class LicenseService {
         return const LicenseActivationResult(
           success: false,
           requiresInput: true,
-          errorMessage: 'Terminal token not recognised. Check the URL and try again.',
+          errorMessage:
+              'Terminal token not recognised. Check the URL and try again.',
         );
       }
 
@@ -1513,8 +1648,14 @@ class LicenseService {
       // Cache resolved values for fast subsequent loads
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_terminalTokenStorageKey, t);
-      await prefs.setString(_spinTpnStorageKey, row['spin_tpn']?.toString().trim() ?? '');
-      await prefs.setString(_spinAuthKeyStorageKey, row['spin_auth_key']?.toString().trim() ?? '');
+      await prefs.setString(
+        _spinTpnStorageKey,
+        row['spin_tpn']?.toString().trim() ?? '',
+      );
+      await prefs.setString(
+        _spinAuthKeyStorageKey,
+        row['spin_auth_key']?.toString().trim() ?? '',
+      );
       await _storeLicenseKey(context.licenseKey);
       await _storeTerminalNumber(context.terminalNumber);
       await _storeLocationName(context.locationName);
@@ -1612,7 +1753,8 @@ class LicenseService {
         final row = Map<String, dynamic>.from(raw as Map);
         final rowId = pickId(row);
         final rowNumber = pickTerminalNumber(row);
-        if ((normalizedTerminalId.isNotEmpty && rowId == normalizedTerminalId) ||
+        if ((normalizedTerminalId.isNotEmpty &&
+                rowId == normalizedTerminalId) ||
             (normalizedTerminalNumber.isNotEmpty &&
                 rowNumber == normalizedTerminalNumber)) {
           matched = row;
