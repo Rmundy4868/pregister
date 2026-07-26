@@ -1,0 +1,29 @@
+﻿{
+    "backupName":  "pregister-full-backup-20260714-213517",
+    "createdAt":  "2026-07-14T21:35:29",
+    "repoRoot":  "C:\\Users\\rmund\\Documents\\FlutterProjects\\paaayit\\pregister",
+    "gitCommit":  "",
+    "toolVersions":  {
+                         "flutter":  "Flutter 3.44.4 ΓÇó channel stable ΓÇó https://github.com/flutter/flutter.git",
+                         "dart":  "Dart SDK version: 3.12.2 (stable) (Tue Jun 9 01:11:39 2026 -0700) on \"windows_x64\"",
+                         "node":  "v24.13.0"
+                     },
+    "supabaseUrl":  "https://qpfdbaefkgedlsvdyfcg.supabase.co",
+    "webPort":  8181,
+    "backendPort":  3000,
+    "databaseSnapshotMode":  "migrations-only",
+    "databaseSnapshotNote":  "Exact remote Supabase row state is not captured on this machine because pg_dump / Supabase CLI is not installed. Local repo state, identity files, backend env, and SQL migrations are captured.",
+    "identityFile":  "runtime\\install.identity.json",
+    "restoreCommand":  "restore_backup.cmd",
+    "criticalMigrations":  [
+                               "supabase/2026-05-13_resolve_install_from_device.sql"
+                           ],
+    "restoreSteps":  [
+                         "1. Run restore_backup.cmd from inside the backup folder to restore the local workspace state.",
+                         "2. If moving to a different machine, verify backend\\.env and runtime\\install.identity.json contain the intended environment values.",
+                         "3. Re-apply target Supabase SQL files if the remote database also needs to be returned to this state.",
+                         "4. Start backend and app, then re-run integrity checks."
+                     ],
+    "integrityCheckPassedAt":  "2026-07-14T21:35:29",
+    "sessionNotes":  "Login Integrity Check PASSED (all except RPC guard probe fixed). Card/cash transaction flow validated. Node backend confirmed running on port 3000."
+}

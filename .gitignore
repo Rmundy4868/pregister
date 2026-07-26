@@ -1,0 +1,36 @@
+# Flutter/Dart
+.dart_tool/
+.packages
+.pub/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+connector-run.log
+
+# Local/runtime identity and secrets
+runtime/install.identity.json
+backend/.env
+
+# Node dependencies
+backend/node_modules/
+
+# Generated helpers and local manifests
+.flutter-plugins-dependencies
+
+# Local backup and distribution artifacts
+backup/
+dist/
+
+# Optional local temp folders/files
+*.tmp
+*.temp
