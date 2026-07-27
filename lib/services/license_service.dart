@@ -288,6 +288,64 @@ class LicenseService {
     TerminalConfig.clear();
   }
 
+  Future<String?> releaseCurrentActivation({
+    bool deactivateTerminal = true,
+  }) async {
+    final activeContext = _activeContext;
+    final licenseKey = activeContext?.licenseKey.trim().isNotEmpty == true
+        ? activeContext!.licenseKey.trim()
+        : ((await getStoredLicenseKey()) ?? '').trim();
+    final terminalNumber =
+        activeContext?.terminalNumber.trim().isNotEmpty == true
+        ? activeContext!.terminalNumber.trim()
+        : ((await getStoredTerminalNumber()) ?? '').trim();
+    final locationName = activeContext?.locationName.trim().isNotEmpty == true
+        ? activeContext!.locationName.trim()
+        : ((await getStoredLocationName()) ?? '').trim();
+    final deviceId = ((await getStoredDeviceId()) ?? '').trim();
+
+    if (licenseKey.isEmpty) {
+      return 'No stored license context was available to release.';
+    }
+
+    try {
+      await SupabaseService.client.rpc(
+        'deactivate_install_license',
+        params: {
+          'p_license_key': licenseKey,
+          if (terminalNumber.isNotEmpty) 'p_terminal_number': terminalNumber,
+          if (locationName.isNotEmpty) 'p_location_name': locationName,
+          if (deviceId.isNotEmpty) 'p_device_id': deviceId,
+          'p_deactivate_terminal': deactivateTerminal,
+        },
+      );
+      return null;
+    } catch (error) {
+      final text = error.toString().toLowerCase();
+      if (text.contains('deactivate_install_license') &&
+          (text.contains('does not exist') ||
+              text.contains('not found') ||
+              text.contains('pgrst202') ||
+              text.contains('42883') ||
+              text.contains('schema cache'))) {
+        return 'Database release RPC is missing. Run the deactivate install migration, then retry.';
+      }
+      return 'Activation release failed: $error';
+    }
+  }
+
+  Future<void> releaseAndClearActivationState({
+    bool deactivateTerminal = true,
+  }) async {
+    final releaseError = await releaseCurrentActivation(
+      deactivateTerminal: deactivateTerminal,
+    );
+    await clearActivationState();
+    if (releaseError != null) {
+      throw Exception(releaseError);
+    }
+  }
+
   Future<void> _storeLicenseKey(String licenseKey) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_licenseStorageKey, licenseKey);

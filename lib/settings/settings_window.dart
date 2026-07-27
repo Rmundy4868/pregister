@@ -10,6 +10,7 @@ import '../debug/integrity_checks_screen.dart';
 import '../services/license_service.dart';
 import '../services/settings_data_service.dart';
 import '../services/transaction_flow_parameters.dart';
+import '../terminal/terminal_activation_screen.dart';
 import '../utils/text_file_save.dart';
 
 class SettingsWindow extends StatelessWidget {
@@ -2520,15 +2521,32 @@ class _TableListWindowState extends State<TableListWindow> {
       if (formValues == null) return;
 
       try {
+        final isActive = formValues['isActive'] as bool? ?? true;
+        final activeTerminalId =
+            LicenseService().activeContext?.terminalId.trim() ?? '';
+        final isCurrentTerminalDeactivated =
+            !isActive && activeTerminalId == id.toString().trim();
+
         await _settingsDataService.updateTerminalForm(
           id: id,
           locationId: formValues['locationId']?.toString() ?? '',
           terminalNumber: formValues['terminalNumber']?.toString() ?? '',
           name: formValues['name']?.toString() ?? '',
           code: formValues['code']?.toString() ?? '',
-          isActive: formValues['isActive'] as bool? ?? true,
+          isActive: isActive,
         );
         if (!mounted) return;
+        if (isCurrentTerminalDeactivated) {
+          await LicenseService().clearActivationState();
+          if (!mounted) return;
+          Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+            MaterialPageRoute<void>(
+              builder: (_) => const TerminalActivationScreen(),
+            ),
+            (route) => false,
+          );
+          return;
+        }
         _showInfoSnackBarWithMessenger(messenger, 'Terminal updated.');
         _refresh();
       } catch (error) {

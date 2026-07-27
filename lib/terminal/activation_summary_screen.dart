@@ -50,7 +50,10 @@ class ActivationSummaryScreen extends StatelessWidget {
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 760),
                 child: SingleChildScrollView(
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 28,
+                  ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
@@ -63,8 +66,14 @@ class ActivationSummaryScreen extends StatelessWidget {
                       const SizedBox(height: 12),
                       _section('Organization', [
                         _row('Organization Name', _val(ctx?.organizationName)),
-                        _row('Organization Number', _val(ctx?.organizationNumber)),
-                        _row('Organization ID', _val(ctx?.organizationId.toString())),
+                        _row(
+                          'Organization Number',
+                          _val(ctx?.organizationNumber),
+                        ),
+                        _row(
+                          'Organization ID',
+                          _val(ctx?.organizationId.toString()),
+                        ),
                         _row('License Key', _val(ctx?.licenseKey)),
                       ]),
                       const SizedBox(height: 12),
@@ -77,14 +86,26 @@ class ActivationSummaryScreen extends StatelessWidget {
                         _row('Terminal Name', _val(ctx?.terminalName)),
                         _row('Terminal Number', _val(ctx?.terminalNumber)),
                         _row('Terminal ID', _val(ctx?.terminalId.toString())),
-                        _row('Terminal Licenses', _val(ctx?.terminalLicenses.toString())),
-                        _row('Terminals Active', _val(ctx?.terminalsActive.toString())),
+                        _row(
+                          'Terminal Licenses',
+                          _val(ctx?.terminalLicenses.toString()),
+                        ),
+                        _row(
+                          'Terminals Active',
+                          _val(ctx?.terminalsActive.toString()),
+                        ),
                       ]),
                       const SizedBox(height: 12),
                       _section('Payment Configuration', [
-                        _row('Card Reader Type', _val(TerminalConfig.cardReaderType)),
+                        _row(
+                          'Card Reader Type',
+                          _val(TerminalConfig.cardReaderType),
+                        ),
                         _row('SPIn TPN', _val(TerminalConfig.spinTpn)),
-                        _row('SPIn Auth Key', _masked(TerminalConfig.spinAuthKey)),
+                        _row(
+                          'SPIn Auth Key',
+                          _masked(TerminalConfig.spinAuthKey),
+                        ),
                         _row(
                           'HPP Auth Token',
                           _masked(TerminalConfig.cardReaderHppAuthToken),
@@ -109,7 +130,10 @@ class ActivationSummaryScreen extends StatelessWidget {
                           ),
                         ),
                         _row('Role', 'owner'),
-                        _row('PIN', result.defaultStaffName.isNotEmpty ? '● ● ● ●' : '—'),
+                        _row(
+                          'PIN',
+                          result.defaultStaffName.isNotEmpty ? '● ● ● ●' : '—',
+                        ),
                       ]),
                       const SizedBox(height: 16),
                       _buildActionCard(context),
@@ -138,8 +162,8 @@ class ActivationSummaryScreen extends StatelessWidget {
       builder: (ctx) => AlertDialog(
         title: const Text('Wipe Activation?'),
         content: const Text(
-          'This will clear all locally stored credentials and return to the '
-          'activation screen. Use this for testing only.',
+          'This will release this install activation, clear local credentials, '
+          'and return to the activation screen.',
         ),
         actions: [
           TextButton(
@@ -155,7 +179,15 @@ class ActivationSummaryScreen extends StatelessWidget {
       ),
     );
     if (confirmed != true) return;
-    await LicenseService().clearActivationState();
+    try {
+      await LicenseService().releaseAndClearActivationState();
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(error.toString())));
+      return;
+    }
     if (!context.mounted) return;
     Navigator.of(context).pushReplacement(
       MaterialPageRoute<void>(builder: (_) => const TerminalActivationScreen()),
@@ -170,13 +202,16 @@ class ActivationSummaryScreen extends StatelessWidget {
     final locationName = ctx?.locationName ?? '';
 
     final baseUrl = Uri.base.origin;
-    final params = Uri(queryParameters: {
-      'lk': licenseKey,
-      'tn': terminalNumber,
-      if (locationName.isNotEmpty) 'loc': locationName,
-    }).query;
+    final params = Uri(
+      queryParameters: {
+        'lk': licenseKey,
+        'tn': terminalNumber,
+        if (locationName.isNotEmpty) 'loc': locationName,
+      },
+    ).query;
     final shortcutUrl = '$baseUrl/?$params';
-    final urlFileContent = '[InternetShortcut]\r\nURL=$shortcutUrl\r\n'
+    final urlFileContent =
+        '[InternetShortcut]\r\nURL=$shortcutUrl\r\n'
         'IconFile=$baseUrl/icons/Icon-192.png\r\nIconIndex=0\r\n';
     final fileName = 'PaaayIT-Terminal-$terminalNumber.url';
 
@@ -247,10 +282,7 @@ class ActivationSummaryScreen extends StatelessWidget {
                 SizedBox(height: 4),
                 Text(
                   'Review this setup before continuing to login.',
-                  style: TextStyle(
-                    color: Color(0xFFE2E8F0),
-                    fontSize: 13,
-                  ),
+                  style: TextStyle(color: Color(0xFFE2E8F0), fontSize: 13),
                 ),
               ],
             ),
@@ -300,7 +332,10 @@ class ActivationSummaryScreen extends StatelessWidget {
               minimumSize: const Size.fromHeight(48),
               backgroundColor: const Color(0xFF1D4ED8),
               foregroundColor: Colors.white,
-              textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+              textStyle: const TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ),
           if (kIsWeb) ...[
