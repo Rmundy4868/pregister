@@ -12623,6 +12623,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
           Navigator.of(dialogContext).pop();
           unawaited(_openTableListWindow(tableName, title));
         },
+        onShowPaymentDiagnostics: () {
+          Navigator.of(dialogContext).pop();
+          unawaited(_showPaymentDiagnosticsDialog());
+        },
       ),
     );
   }

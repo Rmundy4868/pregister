@@ -1,26 +1,28 @@
 import 'dart:convert';
 // ignore_for_file: deprecated_member_use
 
+// ignore: avoid_web_libraries_in_flutter
+import 'dart:html' as html show AnchorElement, Blob, Url;
+
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:pdf/pdf.dart';
-import 'package:pdf/widgets.dart' as pw;
-import 'package:printing/printing.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../debug/integrity_checks_screen.dart';
 import '../services/license_service.dart';
 import '../services/settings_data_service.dart';
 import '../services/transaction_flow_parameters.dart';
-import '../terminal_config.dart';
-import '../utils/text_file_save.dart';
-import 'staff_manager_v2.dart';
-import 'terminal_manager_v3.dart';
 
 class SettingsWindow extends StatelessWidget {
-  const SettingsWindow({required this.onOpenTable, super.key});
+  const SettingsWindow({
+    required this.onOpenTable,
+    this.onShowPaymentDiagnostics,
+    super.key,
+  });
 
   final void Function(String tableName, String title) onOpenTable;
+  final VoidCallback? onShowPaymentDiagnostics;
 
   @override
   Widget build(BuildContext context) {
@@ -56,24 +58,14 @@ class SettingsWindow extends StatelessWidget {
             const SizedBox(height: 4),
             ElevatedButton(
               style: compactButtonStyle,
-              onPressed: () {
-                showDialog<void>(
-                  context: context,
-                  builder: (_) => const TerminalManagerV3Dialog(),
-                );
-              },
+              onPressed: () => onOpenTable('terminals', 'Terminals'),
               child: const Text('Update Terminals'),
             ),
             const SizedBox(height: 4),
             ElevatedButton(
               style: compactButtonStyle,
-              onPressed: () {
-                showDialog<void>(
-                  context: context,
-                  builder: (_) => const StaffManagerV2Dialog(),
-                );
-              },
-              child: const Text('Staff Management'),
+              onPressed: () => onOpenTable('staff', 'Staff'),
+              child: const Text('Update Staff'),
             ),
             const SizedBox(height: 4),
             ElevatedButton(
@@ -87,6 +79,14 @@ class SettingsWindow extends StatelessWidget {
               },
               child: const Text('Operating Parameters'),
             ),
+            if (onShowPaymentDiagnostics != null) ...[
+              const SizedBox(height: 4),
+              ElevatedButton(
+                style: compactButtonStyle,
+                onPressed: onShowPaymentDiagnostics,
+                child: const Text('Payment Diagnostics'),
+              ),
+            ],
           ],
         ),
       ),
@@ -125,17 +125,14 @@ class _ReceiptOperatingParametersDialogState
   final Map<String, int> _copyCount = {'sale': 2, 'void': 2, 'return': 2};
   final Map<String, CustomerFieldMode> _customerFieldModes =
       TransactionFlowParameters.defaultCustomerFieldModes();
-  final TextEditingController _receiptReplyToEmailController =
-      TextEditingController();
 
   bool _staffTrackingEnabled = false;
   bool _customerTrackingEnabled = false;
   bool _integrityChecksEnabled = false;
-  bool _enableProcessorSurcharge = false;
+  bool _voidsRefundsIntegrityCheckEnabled = false;
 
   bool _loading = true;
   bool _saving = false;
-  bool _receiptReplyToLoadedWithValue = false;
 
   static const Map<String, String> _customerFieldLabels = {
     'invoice_reference': 'Invoice / Reference',
@@ -156,26 +153,23 @@ class _ReceiptOperatingParametersDialogState
     _load();
   }
 
-  @override
-  void dispose() {
-    _receiptReplyToEmailController.dispose();
-    super.dispose();
-  }
-
   Future<void> _load() async {
+    final prefs = await SharedPreferences.getInstance();
     final txFlowParams = await TransactionFlowParameters.load();
     for (final type in _receiptTypes.keys) {
-      _previewEnabled[type] = txFlowParams.receiptPreviewFor(type);
-      _copyCount[type] = txFlowParams.receiptCopyCountFor(type);
+      _previewEnabled[type] =
+          prefs.getBool('operating.receipts.$type.preview_enabled') ?? true;
+      _copyCount[type] =
+          (prefs.getInt('operating.receipts.$type.copy_count') ?? 2).clamp(
+            1,
+            10,
+          );
     }
     _staffTrackingEnabled = txFlowParams.staffTrackingEnabled;
     _customerTrackingEnabled = txFlowParams.customerTrackingEnabled;
     _integrityChecksEnabled = txFlowParams.integrityChecksEnabled;
-    _enableProcessorSurcharge = txFlowParams.enableProcessorSurcharge;
-    _receiptReplyToEmailController.text = txFlowParams.receiptReplyToEmail;
-    _receiptReplyToLoadedWithValue = txFlowParams.receiptReplyToEmail
-        .trim()
-        .isNotEmpty;
+    _voidsRefundsIntegrityCheckEnabled =
+        txFlowParams.voidsRefundsIntegrityCheckEnabled;
     for (final entry in txFlowParams.customerFieldModes.entries) {
       _customerFieldModes[entry.key] = entry.value;
     }
@@ -189,18 +183,26 @@ class _ReceiptOperatingParametersDialogState
     setState(() {
       _saving = true;
     });
+    final prefs = await SharedPreferences.getInstance();
+    for (final type in _receiptTypes.keys) {
+      await prefs.setBool(
+        'operating.receipts.$type.preview_enabled',
+        _previewEnabled[type] ?? true,
+      );
+      await prefs.setInt(
+        'operating.receipts.$type.copy_count',
+        (_copyCount[type] ?? 2).clamp(1, 10),
+      );
+    }
 
     await TransactionFlowParameters(
       staffTrackingEnabled: _staffTrackingEnabled,
       customerTrackingEnabled: _customerTrackingEnabled,
       integrityChecksEnabled: _integrityChecksEnabled,
-      enableProcessorSurcharge: _enableProcessorSurcharge,
+      voidsRefundsIntegrityCheckEnabled: _voidsRefundsIntegrityCheckEnabled,
       customerFieldModes: Map<String, CustomerFieldMode>.from(
         _customerFieldModes,
       ),
-      receiptPreviewEnabled: Map<String, bool>.from(_previewEnabled),
-      receiptCopyCount: Map<String, int>.from(_copyCount),
-      receiptReplyToEmail: _receiptReplyToEmailController.text.trim(),
     ).save();
 
     if (!mounted) return;
@@ -216,7 +218,6 @@ class _ReceiptOperatingParametersDialogState
   Widget _buildTypeCard(String type, String label) {
     final preview = _previewEnabled[type] ?? true;
     final copies = _copyCount[type] ?? 2;
-    const dropdownTextStyle = TextStyle(fontSize: 13, color: Colors.black87);
 
     return Card(
       child: Padding(
@@ -259,23 +260,12 @@ class _ReceiptOperatingParametersDialogState
                 DropdownButton<int>(
                   value: copies,
                   isDense: true,
-                  dropdownColor: Colors.white,
-                  style: dropdownTextStyle,
+                  style: const TextStyle(fontSize: 13),
                   items: List.generate(
                     10,
                     (index) => DropdownMenuItem(
                       value: index + 1,
-                      child: Text(
-                        index + 1 == 9 ? '9 (Preview Only)' : '${index + 1}',
-                        style: dropdownTextStyle,
-                      ),
-                    ),
-                  ),
-                  selectedItemBuilder: (context) => List.generate(
-                    10,
-                    (index) => Text(
-                      index + 1 == 9 ? '9 (Preview Only)' : '${index + 1}',
-                      style: dropdownTextStyle,
+                      child: Text('${index + 1}'),
                     ),
                   ),
                   onChanged: (value) {
@@ -289,7 +279,7 @@ class _ReceiptOperatingParametersDialogState
             ),
             const SizedBox(height: 2),
             const Text(
-              'Copy 9 = Preview only (merchant + customer). Copy 1 = Merchant, Copy 2 = Customer, Copy 3+ = Additional copies.',
+              'Copy 1 = Merchant, Copy 2 = Customer, Copy 3+ = Additional copies.',
               style: TextStyle(fontSize: 11),
             ),
           ],
@@ -299,9 +289,6 @@ class _ReceiptOperatingParametersDialogState
   }
 
   Widget _buildTransactionFlowCard() {
-    final replyToText = _receiptReplyToEmailController.text.trim();
-    final hasReplyTo = replyToText.isNotEmpty;
-
     return Card(
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
@@ -374,17 +361,17 @@ class _ReceiptOperatingParametersDialogState
               dense: true,
               contentPadding: EdgeInsets.zero,
               title: const Text(
-                'Enable Processor Surcharge',
+                'Voids / Refunds Integrity Check',
                 style: TextStyle(fontSize: 13),
               ),
               subtitle: const Text(
-                'When enabled, card/online payment requests ask the processor to calculate surcharge eligibility and amount.',
+                'Run pass/fail verification after void and refund ledger changes.',
                 style: TextStyle(fontSize: 11),
               ),
-              value: _enableProcessorSurcharge,
+              value: _voidsRefundsIntegrityCheckEnabled,
               onChanged: (value) {
                 setState(() {
-                  _enableProcessorSurcharge = value;
+                  _voidsRefundsIntegrityCheckEnabled = value;
                 });
               },
             ),
@@ -406,42 +393,6 @@ class _ReceiptOperatingParametersDialogState
                 label: const Text('Integrity Checks'),
               ),
             ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: _receiptReplyToEmailController,
-              keyboardType: TextInputType.emailAddress,
-              onChanged: (_) => setState(() {}),
-              decoration: const InputDecoration(
-                labelText: 'Receipt Reply-To Email (Optional)',
-                hintText: 'receipts@yourdomain.com',
-                border: OutlineInputBorder(),
-                isDense: true,
-              ),
-            ),
-            const SizedBox(height: 4),
-            if (hasReplyTo)
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Padding(
-                    padding: EdgeInsets.only(top: 1, right: 4),
-                    child: Icon(Icons.info_outline, size: 14),
-                  ),
-                  Expanded(
-                    child: Text(
-                      _receiptReplyToLoadedWithValue
-                          ? 'Loaded from terminal/location settings. This value may be inherited from your location default.'
-                          : 'This terminal will use the entered Reply-To address for receipt emails.',
-                      style: const TextStyle(fontSize: 11),
-                    ),
-                  ),
-                ],
-              )
-            else
-              const Text(
-                'Leave blank to inherit your location default Reply-To on save.',
-                style: TextStyle(fontSize: 11),
-              ),
             if (_customerTrackingEnabled) ...[
               const SizedBox(height: 6),
               const Text(
@@ -466,55 +417,19 @@ class _ReceiptOperatingParametersDialogState
                       DropdownButton<CustomerFieldMode>(
                         value: mode,
                         isDense: true,
-                        dropdownColor: Colors.white,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.black87,
-                        ),
+                        style: const TextStyle(fontSize: 12),
                         items: const [
                           DropdownMenuItem(
                             value: CustomerFieldMode.required,
-                            child: Text(
-                              'Required',
-                              style: TextStyle(color: Colors.black87),
-                            ),
+                            child: Text('Required'),
                           ),
                           DropdownMenuItem(
                             value: CustomerFieldMode.optional,
-                            child: Text(
-                              'Optional',
-                              style: TextStyle(color: Colors.black87),
-                            ),
+                            child: Text('Optional'),
                           ),
                           DropdownMenuItem(
                             value: CustomerFieldMode.hidden,
-                            child: Text(
-                              'Hide',
-                              style: TextStyle(color: Colors.black87),
-                            ),
-                          ),
-                        ],
-                        selectedItemBuilder: (context) => const [
-                          Text(
-                            'Required',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.black87,
-                            ),
-                          ),
-                          Text(
-                            'Optional',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.black87,
-                            ),
-                          ),
-                          Text(
-                            'Hide',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: Colors.black87,
-                            ),
+                            child: Text('Hide'),
                           ),
                         ],
                         onChanged: (value) {
@@ -598,63 +513,12 @@ class TableListWindow extends StatefulWidget {
   State<TableListWindow> createState() => _TableListWindowState();
 }
 
-class _LocationEditorSeed {
-  final String locationId;
-  final String organizationId;
-  final String organizationName;
-  final String organizationNumber;
-  final String name;
-  final String address;
-  final String address2;
-  final String city;
-  final String state;
-  final String zip;
-  final String phone;
-  final String terminalLicenses;
-  final String terminalsActive;
-  final bool allowTipAdjustments;
-  final bool printTipSuggestions;
-  final String tipSuggestion1Pct;
-  final String tipSuggestion2Pct;
-  final String tipSuggestion3Pct;
-  final String tipSuggestionBase;
-  final String receiptCardSignatureMessage;
-  final String receiptMiscMessage;
-  final String receiptReplyToEmail;
-
-  const _LocationEditorSeed({
-    required this.locationId,
-    required this.organizationId,
-    required this.organizationName,
-    required this.organizationNumber,
-    required this.name,
-    required this.address,
-    required this.address2,
-    required this.city,
-    required this.state,
-    required this.zip,
-    required this.phone,
-    required this.terminalLicenses,
-    required this.terminalsActive,
-    required this.allowTipAdjustments,
-    required this.printTipSuggestions,
-    required this.tipSuggestion1Pct,
-    required this.tipSuggestion2Pct,
-    required this.tipSuggestion3Pct,
-    required this.tipSuggestionBase,
-    required this.receiptCardSignatureMessage,
-    required this.receiptMiscMessage,
-    required this.receiptReplyToEmail,
-  });
-}
-
 class _TableListWindowState extends State<TableListWindow> {
   final SettingsDataService _settingsDataService = SettingsDataService();
   final ScrollController _organizationVerticalScrollController =
       ScrollController();
   final ScrollController _organizationHorizontalScrollController =
       ScrollController();
-  final Map<String, bool> _locationTipAdjustmentsCache = <String, bool>{};
   late Future<List<Map<String, dynamic>>> _rowsFuture;
   int? _organizationSortColumnIndex;
   bool _organizationSortAscending = true;
@@ -687,64 +551,9 @@ class _TableListWindowState extends State<TableListWindow> {
   bool _asBool(dynamic value, {bool defaultValue = true}) {
     if (value is bool) return value;
     final normalized = value?.toString().trim().toLowerCase();
-    if (normalized == 'true' ||
-        normalized == 't' ||
-        normalized == '1' ||
-        normalized == 'yes' ||
-        normalized == 'y') {
-      return true;
-    }
-    if (normalized == 'false' ||
-        normalized == 'f' ||
-        normalized == '0' ||
-        normalized == 'no' ||
-        normalized == 'n') {
-      return false;
-    }
+    if (normalized == 'true') return true;
+    if (normalized == 'false') return false;
     return defaultValue;
-  }
-
-  bool? _asOptionalBool(dynamic value) {
-    if (value == null) return null;
-    final normalized = value.toString().trim().toLowerCase();
-    if (normalized == 'true' ||
-        normalized == 't' ||
-        normalized == '1' ||
-        normalized == 'yes' ||
-        normalized == 'y') {
-      return true;
-    }
-    if (normalized == 'false' ||
-        normalized == 'f' ||
-        normalized == '0' ||
-        normalized == 'no' ||
-        normalized == 'n') {
-      return false;
-    }
-    return null;
-  }
-
-  bool? _extractAllowTipAdjustments(Map<String, dynamic>? row) {
-    if (row == null) return null;
-    return _asOptionalBool(
-      row['allow_tip_adjustments'] ?? row['allowTipAdjustments'],
-    );
-  }
-
-  bool? _extractPrintTipSuggestions(Map<String, dynamic>? row) {
-    if (row == null) return null;
-    return _asOptionalBool(
-      row['print_tip_suggestions'] ?? row['printTipSuggestions'],
-    );
-  }
-
-  String _extractLocationString(Map<String, dynamic>? row, List<String> keys) {
-    if (row == null) return '';
-    for (final key in keys) {
-      final value = row[key]?.toString().trim() ?? '';
-      if (value.isNotEmpty) return value;
-    }
-    return '';
   }
 
   Future<List<Map<String, dynamic>>>
@@ -771,20 +580,12 @@ class _TableListWindowState extends State<TableListWindow> {
       return _loadOrganizationsForActiveLicense();
     }
 
-    final activeLocationId =
-        LicenseService().activeContext?.locationId.trim() ?? '';
     var rows = await _settingsDataService.fetchTableRows(
       tableName: widget.tableName,
     );
 
     if (widget.tableName != 'locations') {
       return rows;
-    }
-
-    if (activeLocationId.isNotEmpty) {
-      rows = rows
-          .where((row) => row['id']?.toString().trim() == activeLocationId)
-          .toList();
     }
 
     if (rows.isEmpty) {
@@ -815,87 +616,15 @@ class _TableListWindowState extends State<TableListWindow> {
                 'name': option['name'] ?? '',
                 'organization_id': activeContext?.organizationId ?? '',
                 'organization_number': activeContext?.organizationNumber ?? '',
-                'allow_tip_adjustments':
-                    _locationTipAdjustmentsCache[option['id'] ?? ''],
               },
             )
             .toList();
-        if (activeLocationId.isNotEmpty) {
-          rows = rows
-              .where((row) => row['id']?.toString().trim() == activeLocationId)
-              .toList();
-        }
       }
     }
 
     final enrichedRows = <Map<String, dynamic>>[];
     for (final row in rows) {
       final mutable = Map<String, dynamic>.from(row);
-      final locationId = mutable['id']?.toString().trim() ?? '';
-
-      if (locationId.isNotEmpty) {
-        try {
-          final details = await _settingsDataService.getLocationDetailsById(
-            locationId,
-          );
-          if (!mounted) return rows;
-          final detailsId = details['id']?.toString().trim() ?? '';
-          if (detailsId.isNotEmpty) {
-            mutable['name'] = details['name'] ?? mutable['name'];
-            mutable['organization_id'] =
-                details['organization_id'] ?? mutable['organization_id'];
-            mutable['address'] =
-                details['address'] ??
-                details['address_1'] ??
-                mutable['address'];
-            mutable['address_2'] = details['address_2'] ?? mutable['address_2'];
-            mutable['city'] = details['city'] ?? mutable['city'];
-            mutable['state'] = details['state'] ?? mutable['state'];
-            mutable['zip'] = details['zip'] ?? mutable['zip'];
-            mutable['phone'] = details['phone'] ?? mutable['phone'];
-            mutable['allow_tip_adjustments'] =
-                details['allow_tip_adjustments'] ??
-                mutable['allow_tip_adjustments'];
-            mutable['print_tip_suggestions'] =
-                details['print_tip_suggestions'] ??
-                mutable['print_tip_suggestions'];
-            mutable['tip_suggestion_1_pct'] =
-                details['tip_suggestion_1_pct'] ??
-                mutable['tip_suggestion_1_pct'];
-            mutable['tip_suggestion_2_pct'] =
-                details['tip_suggestion_2_pct'] ??
-                mutable['tip_suggestion_2_pct'];
-            mutable['tip_suggestion_3_pct'] =
-                details['tip_suggestion_3_pct'] ??
-                mutable['tip_suggestion_3_pct'];
-            mutable['tip_suggestion_base'] =
-                details['tip_suggestion_base'] ??
-                mutable['tip_suggestion_base'];
-            mutable['receipt_card_signature_message'] =
-                details['receipt_card_signature_message'] ??
-                mutable['receipt_card_signature_message'];
-            mutable['receipt_misc_message'] =
-                details['receipt_misc_message'] ??
-                mutable['receipt_misc_message'];
-          }
-        } catch (_) {}
-      }
-
-      final extractedAllowTipAdjustments = _extractAllowTipAdjustments(mutable);
-      final cachedAllowTipAdjustments = locationId.isNotEmpty
-          ? _locationTipAdjustmentsCache[locationId]
-          : null;
-      if (extractedAllowTipAdjustments != null) {
-        mutable['allow_tip_adjustments'] = extractedAllowTipAdjustments;
-        if (locationId.isNotEmpty) {
-          _locationTipAdjustmentsCache[locationId] =
-              extractedAllowTipAdjustments;
-        }
-      } else if (cachedAllowTipAdjustments != null) {
-        mutable['allow_tip_adjustments'] = cachedAllowTipAdjustments;
-      } else {
-        mutable['allow_tip_adjustments'] = null;
-      }
       final organizationId = mutable['organization_id']?.toString() ?? '';
       if (organizationId.isNotEmpty) {
         final organization = await _settingsDataService
@@ -916,15 +645,44 @@ class _TableListWindowState extends State<TableListWindow> {
     return enrichedRows;
   }
 
+  List<String> _organizationColumns(
+    List<Map<String, dynamic>> rows, {
+    bool nameFirst = false,
+  }) {
+    final columns = <String>{};
+    for (final row in rows) {
+      columns.addAll(row.keys);
+    }
+
+    final sorted = columns.toList()..sort();
+    final preferredOrder = nameFirst
+        ? ['name', 'organization_number', 'license_key', 'id']
+        : ['id', 'organization_number', 'name', 'license_key'];
+
+    sorted.sort((a, b) {
+      final aIndex = preferredOrder.indexOf(a);
+      final bIndex = preferredOrder.indexOf(b);
+
+      if (aIndex >= 0 && bIndex >= 0) {
+        return aIndex.compareTo(bIndex);
+      }
+      if (aIndex >= 0) return -1;
+      if (bIndex >= 0) return 1;
+      return a.compareTo(b);
+    });
+
+    return sorted;
+  }
+
   Widget _buildOrganizationsTable(
     List<Map<String, dynamic>> rows, {
     required bool includeActions,
   }) {
-    const columns = ['name', 'license_key'];
+    final columns = _organizationColumns(rows, nameFirst: true);
     final sortedRows = List<Map<String, dynamic>>.from(rows);
 
     if (_organizationSortColumnIndex == null) {
-      final defaultIndex = columns.indexOf('name');
+      final defaultIndex = columns.indexOf('organization_number');
       if (defaultIndex >= 0) {
         _organizationSortColumnIndex = defaultIndex;
         _organizationSortAscending = true;
@@ -969,7 +727,7 @@ class _TableListWindowState extends State<TableListWindow> {
               columns: [
                 ...columns.asMap().entries.map(
                   (entry) => DataColumn(
-                    label: Text(entry.value == 'name' ? 'Name' : 'License Key'),
+                    label: Text(entry.value),
                     onSort: (columnIndex, ascending) {
                       setState(() {
                         _organizationSortColumnIndex = columnIndex;
@@ -978,7 +736,7 @@ class _TableListWindowState extends State<TableListWindow> {
                     },
                   ),
                 ),
-                if (includeActions) const DataColumn(label: SizedBox.shrink()),
+                if (includeActions) const DataColumn(label: Text('Actions')),
               ],
               rows: sortedRows
                   .map(
@@ -990,10 +748,14 @@ class _TableListWindowState extends State<TableListWindow> {
                         ),
                         if (includeActions)
                           DataCell(
-                            ElevatedButton.icon(
-                              onPressed: () => _editRow(row),
-                              icon: const Icon(Icons.edit, size: 16),
-                              label: const Text('Edit'),
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                TextButton(
+                                  onPressed: () => _editRow(row),
+                                  child: const Text('Edit'),
+                                ),
+                              ],
                             ),
                           ),
                       ],
@@ -1008,6 +770,20 @@ class _TableListWindowState extends State<TableListWindow> {
   }
 
   Widget _buildLocationsTable(List<Map<String, dynamic>> rows) {
+    const columns = [
+      'name',
+      'address',
+      'address_2',
+      'city',
+      'state',
+      'zip',
+      'phone',
+      'terminal_licenses',
+      'terminals_active',
+      'organization_name',
+      'organization_number',
+    ];
+
     return Scrollbar(
       controller: _organizationVerticalScrollController,
       thumbVisibility: true,
@@ -1018,67 +794,74 @@ class _TableListWindowState extends State<TableListWindow> {
         controller: _organizationVerticalScrollController,
         primary: false,
         scrollDirection: Axis.vertical,
-        child: DataTable(
-          columns: const [
-            DataColumn(label: Text('Location Name')),
-            DataColumn(label: SizedBox.shrink()),
-          ],
-          rows: rows
-              .map(
-                (row) => DataRow(
-                  cells: [
-                    DataCell(SelectableText('${row['name'] ?? ''}')),
-                    DataCell(
-                      ElevatedButton.icon(
-                        onPressed: () => _editRow(row),
-                        icon: const Icon(Icons.edit, size: 16),
-                        label: const Text('Edit'),
-                      ),
+        child: Scrollbar(
+          controller: _organizationHorizontalScrollController,
+          thumbVisibility: true,
+          interactive: true,
+          notificationPredicate: (notification) =>
+              notification.metrics.axis == Axis.horizontal,
+          child: SingleChildScrollView(
+            controller: _organizationHorizontalScrollController,
+            primary: false,
+            scrollDirection: Axis.horizontal,
+            child: DataTable(
+              columns: const [
+                DataColumn(label: Text('location name')),
+                DataColumn(label: Text('address')),
+                DataColumn(label: Text('address_2')),
+                DataColumn(label: Text('city')),
+                DataColumn(label: Text('state')),
+                DataColumn(label: Text('zip')),
+                DataColumn(label: Text('phone')),
+                DataColumn(label: Text('terminal_licenses')),
+                DataColumn(label: Text('terminals_active')),
+                DataColumn(label: Text('organization_name')),
+                DataColumn(label: Text('organization_number')),
+                DataColumn(label: Text('Actions')),
+              ],
+              rows: rows
+                  .map(
+                    (row) => DataRow(
+                      cells: [
+                        ...columns.map(
+                          (column) =>
+                              DataCell(SelectableText('${row[column] ?? ''}')),
+                        ),
+                        DataCell(
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              TextButton(
+                                onPressed: () => _editRow(row),
+                                child: const Text('Edit'),
+                              ),
+                              const SizedBox(width: 6),
+                              TextButton(
+                                onPressed: () => _deleteRow(row),
+                                child: const Text('Delete'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-              )
-              .toList(),
+                  )
+                  .toList(),
+            ),
+          ),
         ),
       ),
     );
   }
 
   Widget _buildTerminalsTable(List<Map<String, dynamic>> rows) {
-    const preferredOrder = [
-      'id',
-      'organization_id',
-      'location_id',
-      'location_name',
+    const columns = [
       'terminal_number',
       'terminal_name',
-      'name',
-      'code',
-      'is_active',
-      'registered_device_id',
+      'location_name',
       'registered_device_label',
+      'is_active',
       'last_seen_at',
-      'spin_tpn',
-      'spin_auth_key',
-      'card_reader_type',
-      'card_reader_hpp_auth_token',
-      'auto_close_batch_enabled',
-      'auto_close_batch_time',
-    ];
-
-    final discovered = <String>{};
-    for (final row in rows) {
-      for (final key in row.keys) {
-        if (key.trim().isNotEmpty) {
-          discovered.add(key);
-        }
-      }
-    }
-
-    final columns = <String>[
-      ...preferredOrder.where(discovered.contains),
-      ...discovered.where((key) => !preferredOrder.contains(key)).toList()
-        ..sort(),
     ];
 
     String displayValueForColumn(String column, dynamic value) {
@@ -1110,9 +893,14 @@ class _TableListWindowState extends State<TableListWindow> {
             primary: false,
             scrollDirection: Axis.horizontal,
             child: DataTable(
-              columns: [
-                ...columns.map((column) => DataColumn(label: Text(column))),
-                const DataColumn(label: Text('Actions')),
+              columns: const [
+                DataColumn(label: Text('terminal_number')),
+                DataColumn(label: Text('terminal_name')),
+                DataColumn(label: Text('location_name')),
+                DataColumn(label: Text('registered_device')),
+                DataColumn(label: Text('is_active')),
+                DataColumn(label: Text('last_seen_at')),
+                DataColumn(label: Text('Actions')),
               ],
               rows: rows
                   .map(
@@ -1132,11 +920,6 @@ class _TableListWindowState extends State<TableListWindow> {
                               TextButton(
                                 onPressed: () => _editRow(row),
                                 child: const Text('Edit'),
-                              ),
-                              const SizedBox(width: 6),
-                              TextButton(
-                                onPressed: () => _deleteRow(row),
-                                child: const Text('Delete'),
                               ),
                             ],
                           ),
@@ -1174,7 +957,6 @@ class _TableListWindowState extends State<TableListWindow> {
     return RegExp(r'^\d{1,6}$').hasMatch(value.trim());
   }
 
-  // ignore: unused_element
   Widget _buildStaffTable(List<Map<String, dynamic>> rows) {
     const columns = [
       'first_name',
@@ -1316,8 +1098,8 @@ class _TableListWindowState extends State<TableListWindow> {
             child: const Text('Skip'),
           ),
           FilledButton.icon(
-            onPressed: () async {
-              await _downloadTextFileFromSettings(
+            onPressed: () {
+              _downloadTextFileFromSettings(
                 psContent,
                 'Remove-PaaayIT-Terminal-$terminalNumber.ps1',
               );
@@ -1334,11 +1116,15 @@ class _TableListWindowState extends State<TableListWindow> {
     );
   }
 
-  Future<void> _downloadTextFileFromSettings(
-    String content,
-    String filename,
-  ) async {
-    await saveTextFile(content: content, fileName: filename);
+  void _downloadTextFileFromSettings(String content, String filename) {
+    if (!kIsWeb) return;
+    final anchor =
+        html.AnchorElement(
+            href: html.Url.createObjectUrl(html.Blob([content], 'text/plain')),
+          )
+          ..setAttribute('download', filename)
+          ..click();
+    html.Url.revokeObjectUrl(anchor.href ?? '');
   }
 
   void _showErrorSnackBar(String message) {
@@ -1680,7 +1466,6 @@ class _TableListWindowState extends State<TableListWindow> {
     return result;
   }
 
-  // ignore: unused_element
   Future<Map<String, dynamic>?> _openStaffForm({
     Map<String, dynamic>? initialRow,
   }) async {
@@ -1760,56 +1545,8 @@ class _TableListWindowState extends State<TableListWindow> {
           initialRow?['registered_device_id']?.toString() ??
           '',
     );
-    final hppAuthTokenController = TextEditingController(
-      text:
-          initialRow?['card_reader_hpp_auth_token']?.toString() ??
-          initialRow?['cardReaderHppAuthToken']?.toString() ??
-          '',
-    );
-    final receiptPrinterNameController = TextEditingController(
-      text:
-          initialRow?['receipt_printer_name']?.toString() ??
-          initialRow?['receiptPrinterName']?.toString() ??
-          '',
-    );
-    final autoCloseTimeController = TextEditingController(
-      text: _normalizeTimeForInput(initialRow?['auto_close_batch_time']),
-    );
-
-    final installedPrinterNames = <String>[];
-    try {
-      final printers = await Printing.listPrinters();
-      for (final printer in printers) {
-        final name = printer.name.trim();
-        if (name.isNotEmpty && !installedPrinterNames.contains(name)) {
-          installedPrinterNames.add(name);
-        }
-      }
-      installedPrinterNames.sort();
-    } catch (_) {
-      // Keep manual input fallback when printer enumeration is unavailable.
-    }
-    if (!mounted) return null;
-    var selectedReceiptPrinter = receiptPrinterNameController.text.trim();
-    if (selectedReceiptPrinter.isNotEmpty &&
-        !installedPrinterNames.contains(selectedReceiptPrinter)) {
-      installedPrinterNames.insert(0, selectedReceiptPrinter);
-    }
 
     var isActive = _asBool(initialRow?['is_active'], defaultValue: true);
-    var autoCloseEnabled = _asBool(
-      initialRow?['auto_close_batch_enabled'],
-      defaultValue: false,
-    );
-    var cardReaderType =
-        ((initialRow?['card_reader_type'] ?? initialRow?['cardReaderType'])
-            ?.toString()
-            .trim()
-            .toLowerCase() ??
-        TerminalConfig.cardReaderNone);
-    if (cardReaderType != TerminalConfig.cardReaderNone) {
-      cardReaderType = TerminalConfig.cardReaderDejavooP12;
-    }
 
     final result = await showDialog<Map<String, dynamic>>(
       context: context,
@@ -1863,246 +1600,6 @@ class _TableListWindowState extends State<TableListWindow> {
                   TextField(
                     controller: codeController,
                     decoration: const InputDecoration(labelText: 'Code'),
-                  ),
-                  const SizedBox(height: 10),
-                  DropdownButtonFormField<String>(
-                    value: cardReaderType,
-                    decoration: const InputDecoration(labelText: 'Card Reader'),
-                    items: const [
-                      DropdownMenuItem(
-                        value: TerminalConfig.cardReaderNone,
-                        child: Text('No Card Reader'),
-                      ),
-                      DropdownMenuItem(
-                        value: TerminalConfig.cardReaderDejavooP12,
-                        child: Text('DejaVoo P12'),
-                      ),
-                    ],
-                    onChanged: (value) {
-                      if (value == null) return;
-                      setDialogState(() {
-                        cardReaderType = value;
-                      });
-                    },
-                  ),
-                  const SizedBox(height: 8),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      cardReaderType == TerminalConfig.cardReaderNone
-                          ? 'This terminal will use keyed card-entry screens instead of a connected reader.'
-                          : 'Use the connected DejaVoo P12 reader for card-present payments.',
-                      style: Theme.of(builderContext).textTheme.bodySmall,
-                    ),
-                  ),
-                  if (cardReaderType == TerminalConfig.cardReaderNone) ...[
-                    const SizedBox(height: 10),
-                    TextField(
-                      controller: hppAuthTokenController,
-                      maxLines: 3,
-                      decoration: const InputDecoration(
-                        labelText: 'HPP Auth Token (for email/SMS links)',
-                        hintText:
-                            'Paste your Hosted Payment Page JWT token here',
-                        helperText:
-                            'Required for keyed card entry and transaction links',
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 10),
-                  if (installedPrinterNames.isNotEmpty)
-                    DropdownButtonFormField<String>(
-                      initialValue: selectedReceiptPrinter.isEmpty
-                          ? null
-                          : selectedReceiptPrinter,
-                      decoration: const InputDecoration(
-                        labelText: 'Default Receipt Printer',
-                        helperText: 'Receipts will use this printer by default',
-                      ),
-                      items: [
-                        const DropdownMenuItem<String>(
-                          value: '',
-                          child: Text('None'),
-                        ),
-                        ...installedPrinterNames.map(
-                          (printerName) => DropdownMenuItem<String>(
-                            value: printerName,
-                            child: Text(printerName),
-                          ),
-                        ),
-                      ],
-                      onChanged: (value) {
-                        setDialogState(() {
-                          selectedReceiptPrinter = (value ?? '').trim();
-                          receiptPrinterNameController.text =
-                              selectedReceiptPrinter;
-                        });
-                      },
-                    )
-                  else ...[
-                    TextField(
-                      controller: receiptPrinterNameController,
-                      decoration: const InputDecoration(
-                        labelText: 'Default Receipt Printer',
-                        hintText: 'e.g. STAR TSP100',
-                        helperText:
-                            'Enter the exact printer name. Browse can help you find it, then save it here.',
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: TextButton.icon(
-                        icon: const Icon(Icons.print_outlined, size: 16),
-                        label: const Text('Browse Printers…'),
-                        style: TextButton.styleFrom(
-                          visualDensity: VisualDensity.compact,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 4,
-                          ),
-                        ),
-                        onPressed: () async {
-                          try {
-                            final printers = await Printing.listPrinters();
-                            if (!builderContext.mounted) return;
-
-                            final names =
-                                printers
-                                    .map((p) => p.name.trim())
-                                    .where((n) => n.isNotEmpty)
-                                    .toSet()
-                                    .toList()
-                                  ..sort();
-
-                            if (names.isNotEmpty) {
-                              final picked = await showDialog<String>(
-                                context: builderContext,
-                                builder: (pickerContext) => SimpleDialog(
-                                  title: const Text('Select Receipt Printer'),
-                                  children: [
-                                    ...names.map(
-                                      (name) => SimpleDialogOption(
-                                        onPressed: () => Navigator.of(
-                                          pickerContext,
-                                        ).pop(name),
-                                        child: Text(name),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              );
-
-                              if (picked != null && picked.trim().isNotEmpty) {
-                                setDialogState(() {
-                                  selectedReceiptPrinter = picked.trim();
-                                  receiptPrinterNameController.text =
-                                      selectedReceiptPrinter;
-                                });
-                              }
-                              return;
-                            }
-                          } catch (_) {
-                            // Fall through to OS print dialog fallback.
-                          }
-
-                          // Browser fallback: show OS print dialog to inspect
-                          // installed printers, then prompt to save the chosen
-                          // name into this form field.
-                          try {
-                            await Printing.layoutPdf(
-                              name: 'Printer Browser — pregister',
-                              onLayout: (_) async {
-                                final doc = pw.Document();
-                                doc.addPage(
-                                  pw.Page(
-                                    pageFormat: const PdfPageFormat(
-                                      80 * PdfPageFormat.mm,
-                                      40 * PdfPageFormat.mm,
-                                    ),
-                                    build: (_) => pw.Center(
-                                      child: pw.Text(
-                                        'Cancel this dialog\nto note your receipt printer name.',
-                                        textAlign: pw.TextAlign.center,
-                                        style: const pw.TextStyle(fontSize: 10),
-                                      ),
-                                    ),
-                                  ),
-                                );
-                                return doc.save();
-                              },
-                            );
-                          } catch (_) {
-                            // Ignore — user may have cancelled.
-                          }
-
-                          if (!builderContext.mounted) return;
-                          final nameController = TextEditingController(
-                            text: receiptPrinterNameController.text,
-                          );
-                          final enteredName = await showDialog<String>(
-                            context: builderContext,
-                            builder: (nameContext) => AlertDialog(
-                              title: const Text('Save Printer Name'),
-                              content: TextField(
-                                controller: nameController,
-                                autofocus: true,
-                                decoration: const InputDecoration(
-                                  labelText: 'Printer name from dialog',
-                                  hintText: 'e.g. STAR TSP100',
-                                ),
-                              ),
-                              actions: [
-                                TextButton(
-                                  onPressed: () =>
-                                      Navigator.of(nameContext).pop(),
-                                  child: const Text('Cancel'),
-                                ),
-                                TextButton(
-                                  onPressed: () => Navigator.of(
-                                    nameContext,
-                                  ).pop(nameController.text.trim()),
-                                  child: const Text('Use Name'),
-                                ),
-                              ],
-                            ),
-                          );
-
-                          if (enteredName != null &&
-                              enteredName.trim().isNotEmpty) {
-                            setDialogState(() {
-                              selectedReceiptPrinter = enteredName.trim();
-                              receiptPrinterNameController.text =
-                                  selectedReceiptPrinter;
-                            });
-                          }
-                        },
-                      ),
-                    ),
-                  ],
-                  const SizedBox(height: 10),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Auto-close batch enabled'),
-                    value: autoCloseEnabled,
-                    onChanged: (value) {
-                      setDialogState(() {
-                        autoCloseEnabled = value;
-                        if (!value) autoCloseTimeController.clear();
-                      });
-                    },
-                  ),
-                  TextField(
-                    controller: autoCloseTimeController,
-                    enabled: autoCloseEnabled,
-                    inputFormatters: [
-                      FilteringTextInputFormatter.allow(RegExp(r'[0-9:]')),
-                      LengthLimitingTextInputFormatter(8),
-                    ],
-                    decoration: const InputDecoration(
-                      labelText: 'Auto-close time (24h)',
-                      hintText: 'HH:mm or HH:mm:ss',
-                    ),
                   ),
                   const SizedBox(height: 10),
                   TextField(
@@ -2169,13 +1666,6 @@ class _TableListWindowState extends State<TableListWindow> {
                                 .trim(),
                             'name': terminalNameController.text.trim(),
                             'code': codeController.text.trim(),
-                            'cardReaderType': cardReaderType,
-                            'cardReaderHppAuthToken': hppAuthTokenController
-                                .text
-                                .trim(),
-                            'autoCloseBatchEnabled': autoCloseEnabled,
-                            'autoCloseBatchTime': autoCloseTimeController.text
-                                .trim(),
                             'isActive': false,
                           });
                         },
@@ -2213,30 +1703,12 @@ class _TableListWindowState extends State<TableListWindow> {
                   _showErrorSnackBar('Terminal Name is required.');
                   return;
                 }
-                final autoCloseTime = autoCloseTimeController.text.trim();
-                if (autoCloseEnabled) {
-                  final valid = RegExp(
-                    r'^(\d{1,2}):(\d{2})(?::\d{2})?$',
-                  ).hasMatch(autoCloseTime);
-                  if (!valid) {
-                    _showErrorSnackBar(
-                      'Auto-close time must be HH:mm or HH:mm:ss in 24-hour format.',
-                    );
-                    return;
-                  }
-                }
 
                 Navigator.pop(dialogContext, {
                   'locationId': locationId,
                   'terminalNumber': terminalNumber,
                   'name': terminalName,
                   'code': codeController.text.trim(),
-                  'cardReaderType': cardReaderType,
-                  'cardReaderHppAuthToken': hppAuthTokenController.text.trim(),
-                  'receiptPrinterName': receiptPrinterNameController.text
-                      .trim(),
-                  'autoCloseBatchEnabled': autoCloseEnabled,
-                  'autoCloseBatchTime': autoCloseTime,
                   'isActive': isActive,
                 });
               },
@@ -2253,49 +1725,20 @@ class _TableListWindowState extends State<TableListWindow> {
     terminalNameController.dispose();
     codeController.dispose();
     registeredDeviceController.dispose();
-    hppAuthTokenController.dispose();
-    receiptPrinterNameController.dispose();
-    autoCloseTimeController.dispose();
     return result;
   }
 
   Future<Map<String, dynamic>?> _openTerminalForm({
     Map<String, dynamic>? initialRow,
   }) async {
-    Map<String, dynamic>? effectiveRow = initialRow;
-    final initialTerminalId = (initialRow?['id'] ?? '').toString().trim();
-    if (initialTerminalId.isNotEmpty) {
-      final terminalDetails = await _settingsDataService.getTerminalDetailsById(
-        initialTerminalId,
-      );
-      if (!mounted) return null;
-      if (terminalDetails != null) {
-        effectiveRow = {
-          ...?initialRow,
-          ...terminalDetails,
-          // Keep table/UI aliases expected by dialog fields.
-          'terminal_name':
-              terminalDetails['terminal_name'] ??
-              terminalDetails['name'] ??
-              initialRow?['terminal_name'],
-          'card_reader_type':
-              terminalDetails['card_reader_type'] ??
-              initialRow?['card_reader_type'],
-          'card_reader_hpp_auth_token':
-              terminalDetails['card_reader_hpp_auth_token'] ??
-              initialRow?['card_reader_hpp_auth_token'],
-        };
-      }
-    }
-
     final activeContext = LicenseService().activeContext;
 
     final organizationId =
-        effectiveRow?['organization_id']?.toString() ??
+        initialRow?['organization_id']?.toString() ??
         activeContext?.organizationId ??
         '';
     final locationId =
-        effectiveRow?['location_id']?.toString() ??
+        initialRow?['location_id']?.toString() ??
         activeContext?.locationId ??
         '';
 
@@ -2307,7 +1750,7 @@ class _TableListWindowState extends State<TableListWindow> {
       organizationName = organizationDetails['name'] ?? '';
     }
 
-    var locationName = effectiveRow?['location_name']?.toString() ?? '';
+    var locationName = initialRow?['location_name']?.toString() ?? '';
     if (locationName.trim().isEmpty && locationId.trim().isNotEmpty) {
       final locationDetails = await _settingsDataService.getLocationDetailsById(
         locationId,
@@ -2324,7 +1767,7 @@ class _TableListWindowState extends State<TableListWindow> {
     }
 
     return _showTerminalFormDialog(
-      initialRow: effectiveRow,
+      initialRow: initialRow,
       locationId: locationId,
       organizationName: organizationName,
       locationName: locationName,
@@ -2386,402 +1829,214 @@ class _TableListWindowState extends State<TableListWindow> {
     return result;
   }
 
-  Future<Map<String, String>?> _showLocationEditorDialog({
-    required _LocationEditorSeed seed,
-    required bool isEditing,
+  Future<Map<String, String>?> _showLocationFormDialog({
+    required Map<String, dynamic>? initialRow,
+    required String organizationId,
+    required String organizationName,
+    required String organizationNumber,
+    required String name,
+    required String address,
+    required String address2,
+    required String city,
+    required String state,
+    required String zip,
+    required String phone,
+    required String terminalLicenses,
+    required String terminalsActive,
   }) async {
-    final orgIdController = TextEditingController(text: seed.organizationId);
-    final orgNameController = TextEditingController(
-      text: seed.organizationName,
-    );
-    final orgNumberController = TextEditingController(
-      text: seed.organizationNumber,
-    );
-    final nameController = TextEditingController(text: seed.name);
-    final addressController = TextEditingController(text: seed.address);
-    final address2Controller = TextEditingController(text: seed.address2);
-    final cityController = TextEditingController(text: seed.city);
-    final stateController = TextEditingController(text: seed.state);
-    final zipController = TextEditingController(text: seed.zip);
-    final phoneController = TextEditingController(text: seed.phone);
+    final orgIdController = TextEditingController(text: organizationId);
+    final orgNameController = TextEditingController(text: organizationName);
+    final orgNumberController = TextEditingController(text: organizationNumber);
+    final nameController = TextEditingController(text: name);
+    final addressController = TextEditingController(text: address);
+    final address2Controller = TextEditingController(text: address2);
+    final cityController = TextEditingController(text: city);
+    final stateController = TextEditingController(text: state);
+    final zipController = TextEditingController(text: zip);
+    final phoneController = TextEditingController(text: phone);
     final terminalLicensesController = TextEditingController(
-      text: seed.terminalLicenses,
+      text: terminalLicenses,
     );
     final terminalsActiveController = TextEditingController(
-      text: seed.terminalsActive,
+      text: terminalsActive,
     );
-    final tipSuggestion1PctController = TextEditingController(
-      text: seed.tipSuggestion1Pct,
-    );
-    final tipSuggestion2PctController = TextEditingController(
-      text: seed.tipSuggestion2Pct,
-    );
-    final tipSuggestion3PctController = TextEditingController(
-      text: seed.tipSuggestion3Pct,
-    );
-    final receiptCardSignatureMessageController = TextEditingController(
-      text: seed.receiptCardSignatureMessage,
-    );
-    final receiptMiscMessageController = TextEditingController(
-      text: seed.receiptMiscMessage,
-    );
-    final receiptReplyToEmailController = TextEditingController(
-      text: seed.receiptReplyToEmail,
-    );
-
-    var allowTipAdjustmentsEnabled = seed.allowTipAdjustments;
-    var printTipSuggestionsEnabled = seed.printTipSuggestions;
-    var tipSuggestionBase = seed.tipSuggestionBase;
 
     final result = await showDialog<Map<String, String>>(
       context: context,
-      builder: (dialogContext) => StatefulBuilder(
-        builder: (builderContext, setDialogState) => AlertDialog(
-          title: Text(isEditing ? 'Edit Location' : 'Add Location'),
-          content: SizedBox(
-            width: 520,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (!isEditing && orgNumberController.text.trim().isEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: Text(
-                        'Organization context is missing. Save will use license activation fallback to create/select the location.',
-                        style: TextStyle(
-                          color: Theme.of(builderContext).colorScheme.error,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(initialRow == null ? 'Add Location' : 'Edit Location'),
+        content: SizedBox(
+          width: 520,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (initialRow == null &&
+                    orgNumberController.text.trim().isEmpty)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 10),
+                    child: Text(
+                      'Organization context is missing. Save will use license activation fallback to create/select the location.',
+                      style: TextStyle(
+                        color: Theme.of(dialogContext).colorScheme.error,
+                      ),
+                    ),
+                  ),
+                TextField(
+                  controller: orgNameController,
+                  enabled: false,
+                  readOnly: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Organization Name',
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: orgIdController,
+                  enabled: false,
+                  readOnly: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Organization ID',
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: orgNumberController,
+                  enabled: false,
+                  readOnly: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Organization Number',
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: nameController,
+                  autofocus: initialRow == null,
+                  decoration: const InputDecoration(
+                    labelText: 'Location Name *',
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: addressController,
+                  decoration: const InputDecoration(labelText: 'Address'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: address2Controller,
+                  decoration: const InputDecoration(labelText: 'Address 2'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: cityController,
+                  decoration: const InputDecoration(labelText: 'City'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: stateController,
+                  decoration: const InputDecoration(labelText: 'State'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: zipController,
+                  decoration: const InputDecoration(labelText: 'ZIP'),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: phoneController,
+                  keyboardType: TextInputType.phone,
+                  inputFormatters: [
+                    TextInputFormatter.withFunction((oldValue, newValue) {
+                      final formatted = _formatPhoneNumber(newValue.text);
+                      return TextEditingValue(
+                        text: formatted,
+                        selection: TextSelection.collapsed(
+                          offset: formatted.length,
                         ),
-                      ),
-                    ),
-                  TextField(
-                    controller: orgNameController,
-                    enabled: false,
-                    readOnly: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Organization Name',
-                    ),
+                      );
+                    }),
+                  ],
+                  decoration: const InputDecoration(
+                    labelText: 'Phone Number',
+                    hintText: '(555) 123-4567',
                   ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: orgIdController,
-                    enabled: false,
-                    readOnly: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Organization ID',
-                    ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: terminalLicensesController,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(3),
+                  ],
+                  decoration: const InputDecoration(
+                    labelText: 'Terminal Licenses',
+                    hintText: 'Maximum active terminals',
                   ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: orgNumberController,
-                    enabled: false,
-                    readOnly: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Organization Number',
-                    ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: terminalsActiveController,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(3),
+                  ],
+                  decoration: const InputDecoration(
+                    labelText: 'Terminals Active',
+                    hintText: 'Current active terminals',
                   ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: nameController,
-                    autofocus: !isEditing,
-                    decoration: const InputDecoration(
-                      labelText: 'Location Name *',
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: addressController,
-                    decoration: const InputDecoration(labelText: 'Address'),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: address2Controller,
-                    decoration: const InputDecoration(labelText: 'Address 2'),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: cityController,
-                    decoration: const InputDecoration(labelText: 'City'),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: stateController,
-                    decoration: const InputDecoration(labelText: 'State'),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: zipController,
-                    decoration: const InputDecoration(labelText: 'ZIP'),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: phoneController,
-                    keyboardType: TextInputType.phone,
-                    inputFormatters: [
-                      TextInputFormatter.withFunction((oldValue, newValue) {
-                        final formatted = _formatPhoneNumber(newValue.text);
-                        return TextEditingValue(
-                          text: formatted,
-                          selection: TextSelection.collapsed(
-                            offset: formatted.length,
-                          ),
-                        );
-                      }),
-                    ],
-                    decoration: const InputDecoration(
-                      labelText: 'Phone Number',
-                      hintText: '(555) 123-4567',
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: terminalLicensesController,
-                    enabled: false,
-                    readOnly: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Terminal Licenses',
-                      hintText: 'Display only',
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: terminalsActiveController,
-                    enabled: false,
-                    readOnly: true,
-                    decoration: const InputDecoration(
-                      labelText: 'Terminals Active',
-                      hintText: 'Display only',
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Allow Tip Adjustments'),
-                    subtitle: const Text(
-                      'Enable post-sale tip adjust for this location.',
-                    ),
-                    value: allowTipAdjustmentsEnabled,
-                    onChanged: (value) {
-                      setDialogState(() {
-                        allowTipAdjustmentsEnabled = value;
-                      });
-                    },
-                  ),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: const Text('Print Tip Suggestions'),
-                    subtitle: const Text(
-                      'Show suggested tip percentages and write-in lines on sale receipts.',
-                    ),
-                    value: printTipSuggestionsEnabled,
-                    onChanged: allowTipAdjustmentsEnabled
-                        ? (value) {
-                            setDialogState(() {
-                              printTipSuggestionsEnabled = value;
-                            });
-                          }
-                        : null,
-                  ),
-                  const SizedBox(height: 10),
-                  DropdownButtonFormField<String>(
-                    value: tipSuggestionBase,
-                    decoration: const InputDecoration(
-                      labelText: 'Tip Suggestion Base',
-                    ),
-                    items: const [
-                      DropdownMenuItem(
-                        value: 'subtotal',
-                        child: Text('Subtotal (pre-tax)'),
-                      ),
-                      DropdownMenuItem(
-                        value: 'total',
-                        child: Text('Total (with tax)'),
-                      ),
-                    ],
-                    onChanged: allowTipAdjustmentsEnabled
-                        ? (value) {
-                            setDialogState(() {
-                              tipSuggestionBase = value ?? 'subtotal';
-                            });
-                          }
-                        : null,
-                  ),
-                  const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: tipSuggestion1PctController,
-                          enabled: allowTipAdjustmentsEnabled,
-                          keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true,
-                          ),
-                          inputFormatters: [
-                            FilteringTextInputFormatter.allow(
-                              RegExp(r'^\d{0,3}(\.\d{0,2})?$'),
-                            ),
-                          ],
-                          decoration: const InputDecoration(
-                            labelText: 'Tip % 1',
-                            hintText: '18',
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: TextField(
-                          controller: tipSuggestion2PctController,
-                          enabled: allowTipAdjustmentsEnabled,
-                          keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true,
-                          ),
-                          inputFormatters: [
-                            FilteringTextInputFormatter.allow(
-                              RegExp(r'^\d{0,3}(\.\d{0,2})?$'),
-                            ),
-                          ],
-                          decoration: const InputDecoration(
-                            labelText: 'Tip % 2',
-                            hintText: '20',
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: TextField(
-                          controller: tipSuggestion3PctController,
-                          enabled: allowTipAdjustmentsEnabled,
-                          keyboardType: const TextInputType.numberWithOptions(
-                            decimal: true,
-                          ),
-                          inputFormatters: [
-                            FilteringTextInputFormatter.allow(
-                              RegExp(r'^\d{0,3}(\.\d{0,2})?$'),
-                            ),
-                          ],
-                          decoration: const InputDecoration(
-                            labelText: 'Tip % 3',
-                            hintText: '25',
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: receiptCardSignatureMessageController,
-                    minLines: 2,
-                    maxLines: 4,
-                    decoration: const InputDecoration(
-                      labelText: 'Card Signature Message',
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: receiptMiscMessageController,
-                    minLines: 2,
-                    maxLines: 4,
-                    decoration: const InputDecoration(
-                      labelText: 'Miscellaneous Message',
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: receiptReplyToEmailController,
-                    keyboardType: TextInputType.emailAddress,
-                    decoration: const InputDecoration(
-                      labelText: 'Receipt Reply-To Email',
-                      hintText: 'receipts@yourdomain.com',
-                    ),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
           ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(dialogContext),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                if (nameController.text.trim().isEmpty) {
-                  _showErrorSnackBar('Location Name is required.');
-                  return;
-                }
-
-                final terminalLicenses =
-                    int.tryParse(terminalLicensesController.text.trim()) ?? 0;
-                final terminalsActive =
-                    int.tryParse(terminalsActiveController.text.trim()) ?? 0;
-
-                if (terminalLicenses < 0 || terminalsActive < 0) {
-                  _showErrorSnackBar('Terminal values cannot be negative.');
-                  return;
-                }
-                if (terminalLicenses > 0 &&
-                    terminalsActive > terminalLicenses) {
-                  _showErrorSnackBar(
-                    'Terminals Active cannot exceed Terminal Licenses.',
-                  );
-                  return;
-                }
-
-                final tipSuggestionValues = [
-                  tipSuggestion1PctController.text.trim(),
-                  tipSuggestion2PctController.text.trim(),
-                  tipSuggestion3PctController.text.trim(),
-                ].map(double.tryParse).toList();
-                if (tipSuggestionValues.any((value) => value == null)) {
-                  _showErrorSnackBar(
-                    'Tip suggestion percentages must be valid numbers.',
-                  );
-                  return;
-                }
-                if (tipSuggestionValues.any(
-                  (value) => value! < 0 || value > 100,
-                )) {
-                  _showErrorSnackBar(
-                    'Tip suggestion percentages must be between 0 and 100.',
-                  );
-                  return;
-                }
-
-                Navigator.pop(dialogContext, {
-                  'organizationId': orgIdController.text.trim(),
-                  'organizationName': orgNameController.text.trim(),
-                  'organizationNumber': orgNumberController.text.trim(),
-                  'name': nameController.text.trim(),
-                  'address': addressController.text.trim(),
-                  'address2': address2Controller.text.trim(),
-                  'city': cityController.text.trim(),
-                  'state': stateController.text.trim(),
-                  'zip': zipController.text.trim(),
-                  'phone': phoneController.text.trim(),
-                  'terminalLicenses': terminalLicensesController.text.trim(),
-                  'terminalsActive': terminalsActiveController.text.trim(),
-                  'allowTipAdjustments': allowTipAdjustmentsEnabled
-                      ? 'true'
-                      : 'false',
-                  'printTipSuggestions': printTipSuggestionsEnabled
-                      ? 'true'
-                      : 'false',
-                  'tipSuggestion1Pct': tipSuggestion1PctController.text.trim(),
-                  'tipSuggestion2Pct': tipSuggestion2PctController.text.trim(),
-                  'tipSuggestion3Pct': tipSuggestion3PctController.text.trim(),
-                  'tipSuggestionBase': tipSuggestionBase,
-                  'receiptCardSignatureMessage':
-                      receiptCardSignatureMessageController.text.trim(),
-                  'receiptMiscMessage': receiptMiscMessageController.text
-                      .trim(),
-                  'receiptReplyToEmail': receiptReplyToEmailController.text
-                      .trim(),
-                });
-              },
-              child: const Text('Save'),
-            ),
-          ],
         ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              if (nameController.text.trim().isEmpty) {
+                _showErrorSnackBar('Location Name is required.');
+                return;
+              }
+
+              final terminalLicenses =
+                  int.tryParse(terminalLicensesController.text.trim()) ?? 0;
+              final terminalsActive =
+                  int.tryParse(terminalsActiveController.text.trim()) ?? 0;
+
+              if (terminalLicenses < 0 || terminalsActive < 0) {
+                _showErrorSnackBar('Terminal values cannot be negative.');
+                return;
+              }
+              if (terminalLicenses > 0 && terminalsActive > terminalLicenses) {
+                _showErrorSnackBar(
+                  'Terminals Active cannot exceed Terminal Licenses.',
+                );
+                return;
+              }
+
+              Navigator.pop(dialogContext, {
+                'organizationId': orgIdController.text.trim(),
+                'organizationName': orgNameController.text.trim(),
+                'organizationNumber': orgNumberController.text.trim(),
+                'name': nameController.text.trim(),
+                'address': addressController.text.trim(),
+                'address2': address2Controller.text.trim(),
+                'city': cityController.text.trim(),
+                'state': stateController.text.trim(),
+                'zip': zipController.text.trim(),
+                'phone': phoneController.text.trim(),
+                'terminalLicenses': terminalLicensesController.text.trim(),
+                'terminalsActive': terminalsActiveController.text.trim(),
+              });
+            },
+            child: const Text('Save'),
+          ),
+        ],
       ),
     );
 
@@ -2797,244 +2052,112 @@ class _TableListWindowState extends State<TableListWindow> {
     phoneController.dispose();
     terminalLicensesController.dispose();
     terminalsActiveController.dispose();
-    tipSuggestion1PctController.dispose();
-    tipSuggestion2PctController.dispose();
-    tipSuggestion3PctController.dispose();
-    receiptCardSignatureMessageController.dispose();
-    receiptMiscMessageController.dispose();
-    receiptReplyToEmailController.dispose();
     return result;
-  }
-
-  Future<_LocationEditorSeed?> _buildLocationEditorSeedForCreate() async {
-    var organizationId = '';
-    var organizationName = '';
-    var organizationNumber = '';
-
-    final activeContext = LicenseService().activeContext;
-    final activeOrganizationId = activeContext?.organizationId ?? '';
-    final activeOrganizationNumber = activeContext?.organizationNumber ?? '';
-
-    if (activeOrganizationId.isNotEmpty) {
-      organizationId = activeOrganizationId;
-    }
-
-    if (activeOrganizationNumber.isNotEmpty) {
-      organizationNumber = activeOrganizationNumber;
-    } else {
-      final defaultOrganizationNumber = await _settingsDataService
-          .getDefaultOrganizationNumber();
-      if (!mounted) return null;
-      organizationNumber = defaultOrganizationNumber ?? '';
-    }
-
-    final orgDetails = await _settingsDataService
-        .getOrganizationDetailsByNumber(organizationNumber.trim());
-    if (!mounted) return null;
-
-    final resolvedOrganizationId = (orgDetails['id'] ?? '').trim();
-    final resolvedOrganizationName = (orgDetails['name'] ?? '').trim();
-
-    if (resolvedOrganizationId.isNotEmpty) {
-      organizationId = resolvedOrganizationId;
-    }
-    if (resolvedOrganizationName.isNotEmpty) {
-      organizationName = resolvedOrganizationName;
-    }
-
-    return _LocationEditorSeed(
-      locationId: '',
-      organizationId: organizationId,
-      organizationName: organizationName,
-      organizationNumber: organizationNumber,
-      name: '',
-      address: '',
-      address2: '',
-      city: '',
-      state: '',
-      zip: '',
-      phone: '',
-      terminalLicenses: '1',
-      terminalsActive: '0',
-      allowTipAdjustments: false,
-      printTipSuggestions: true,
-      tipSuggestion1Pct: '18',
-      tipSuggestion2Pct: '20',
-      tipSuggestion3Pct: '25',
-      tipSuggestionBase: 'subtotal',
-      receiptCardSignatureMessage: '',
-      receiptMiscMessage: '',
-      receiptReplyToEmail: '',
-    );
-  }
-
-  Future<_LocationEditorSeed?> _buildLocationEditorSeedForEdit(
-    Map<String, dynamic> initialRow,
-  ) async {
-    final locationId = initialRow['id']?.toString().trim() ?? '';
-    if (locationId.isEmpty) {
-      _showErrorSnackBar('Cannot edit location without a location id.');
-      return null;
-    }
-
-    final effective = Map<String, dynamic>.from(initialRow);
-    try {
-      final latest = await _settingsDataService.getLocationDetailsById(
-        locationId,
-      );
-      if (!mounted) return null;
-      final latestId = latest['id']?.toString().trim() ?? '';
-      if (latestId.isNotEmpty) {
-        effective.addAll({
-          'id': latest['id'],
-          'organization_id': latest['organization_id'],
-          'name': latest['name'],
-          'address': latest['address'] ?? latest['address_1'],
-          'address_2': latest['address_2'],
-          'city': latest['city'],
-          'state': latest['state'],
-          'zip': latest['zip'],
-          'phone': latest['phone'],
-          'allow_tip_adjustments': latest['allow_tip_adjustments'],
-          'print_tip_suggestions': latest['print_tip_suggestions'],
-          'tip_suggestion_1_pct': latest['tip_suggestion_1_pct'],
-          'tip_suggestion_2_pct': latest['tip_suggestion_2_pct'],
-          'tip_suggestion_3_pct': latest['tip_suggestion_3_pct'],
-          'tip_suggestion_base': latest['tip_suggestion_base'],
-          'receipt_card_signature_message':
-              latest['receipt_card_signature_message'],
-          'receipt_misc_message': latest['receipt_misc_message'],
-          'receipt_reply_to_email': latest['receipt_reply_to_email'],
-        });
-      }
-    } catch (_) {}
-
-    final organizationId =
-        effective['organization_id']?.toString().trim() ?? '';
-    var organizationName =
-        effective['organization_name']?.toString().trim() ?? '';
-    var organizationNumber =
-        effective['organization_number']?.toString().trim() ?? '';
-
-    if (organizationId.isNotEmpty) {
-      final orgDetails = await _settingsDataService.getOrganizationDetailsById(
-        organizationId,
-      );
-      if (!mounted) return null;
-      if ((orgDetails['name'] ?? '').trim().isNotEmpty) {
-        organizationName = orgDetails['name']!.trim();
-      }
-      if ((orgDetails['organization_number'] ?? '').trim().isNotEmpty) {
-        organizationNumber = orgDetails['organization_number']!.trim();
-      }
-    }
-
-    var allowTipAdjustments =
-        _extractAllowTipAdjustments(effective) ??
-        _locationTipAdjustmentsCache[locationId];
-
-    if (allowTipAdjustments == null) {
-      try {
-        allowTipAdjustments = await _settingsDataService
-            .getLocationAllowTipAdjustmentsByLicenseContext(
-              locationId: locationId,
-              locationName: effective['name']?.toString() ?? '',
-            );
-      } catch (_) {}
-    }
-
-    if (allowTipAdjustments == null) {
-      _showErrorSnackBar(
-        'Unable to resolve current Allow Tip Adjustments value for this location. '
-        'Refresh and try again so we do not overwrite it incorrectly.',
-      );
-      return null;
-    }
-
-    _locationTipAdjustmentsCache[locationId] = allowTipAdjustments;
-
-    return _LocationEditorSeed(
-      locationId: locationId,
-      organizationId: organizationId,
-      organizationName: organizationName,
-      organizationNumber: organizationNumber,
-      name: effective['name']?.toString() ?? '',
-      address:
-          (effective['address'] ?? effective['address_1'])?.toString() ?? '',
-      address2: effective['address_2']?.toString() ?? '',
-      city: effective['city']?.toString() ?? '',
-      state: effective['state']?.toString() ?? '',
-      zip: effective['zip']?.toString() ?? '',
-      phone: _formatPhoneNumber(
-        (effective['phone'] ?? effective['phone_number'])?.toString() ?? '',
-      ),
-      terminalLicenses: effective['terminal_licenses']?.toString() ?? '',
-      terminalsActive: effective['terminals_active']?.toString() ?? '',
-      allowTipAdjustments: allowTipAdjustments,
-      printTipSuggestions: _extractPrintTipSuggestions(effective) ?? true,
-      tipSuggestion1Pct:
-          _extractLocationString(effective, [
-            'tip_suggestion_1_pct',
-            'tipSuggestion1Pct',
-          ]).isEmpty
-          ? '18'
-          : _extractLocationString(effective, [
-              'tip_suggestion_1_pct',
-              'tipSuggestion1Pct',
-            ]),
-      tipSuggestion2Pct:
-          _extractLocationString(effective, [
-            'tip_suggestion_2_pct',
-            'tipSuggestion2Pct',
-          ]).isEmpty
-          ? '20'
-          : _extractLocationString(effective, [
-              'tip_suggestion_2_pct',
-              'tipSuggestion2Pct',
-            ]),
-      tipSuggestion3Pct:
-          _extractLocationString(effective, [
-            'tip_suggestion_3_pct',
-            'tipSuggestion3Pct',
-          ]).isEmpty
-          ? '25'
-          : _extractLocationString(effective, [
-              'tip_suggestion_3_pct',
-              'tipSuggestion3Pct',
-            ]),
-      tipSuggestionBase:
-          _extractLocationString(effective, [
-                'tip_suggestion_base',
-                'tipSuggestionBase',
-              ]).toLowerCase() ==
-              'total'
-          ? 'total'
-          : 'subtotal',
-      receiptCardSignatureMessage: _extractLocationString(effective, [
-        'receipt_card_signature_message',
-        'receiptCardSignatureMessage',
-      ]),
-      receiptMiscMessage: _extractLocationString(effective, [
-        'receipt_misc_message',
-        'receiptMiscMessage',
-      ]),
-      receiptReplyToEmail: _extractLocationString(effective, [
-        'receipt_reply_to_email',
-        'receiptReplyToEmail',
-      ]),
-    );
   }
 
   Future<Map<String, String>?> _openLocationForm({
     Map<String, dynamic>? initialRow,
   }) async {
-    final isEditing = initialRow != null;
-    final seed = isEditing
-        ? await _buildLocationEditorSeedForEdit(initialRow)
-        : await _buildLocationEditorSeedForCreate();
-    if (!mounted || seed == null) return null;
+    var organizationId = '';
+    var organizationName = '';
+    var organizationNumber = '';
+    var name = '';
+    var address = '';
+    var address2 = '';
+    var city = '';
+    var state = '';
+    var zip = '';
+    var phone = '';
+    var terminalLicenses = '';
+    var terminalsActive = '';
 
-    return _showLocationEditorDialog(seed: seed, isEditing: isEditing);
+    if (initialRow != null) {
+      final existingOrganizationId =
+          initialRow['organization_id']?.toString() ?? '';
+      if (existingOrganizationId.isNotEmpty) {
+        final orgDetails = await _settingsDataService
+            .getOrganizationDetailsById(existingOrganizationId);
+        if (!mounted) return null;
+        organizationId = orgDetails['id'] ?? existingOrganizationId;
+        organizationName =
+            orgDetails['name'] ??
+            initialRow['organization_name']?.toString() ??
+            '';
+        organizationNumber =
+            orgDetails['organization_number'] ??
+            initialRow['organization_number']?.toString() ??
+            '';
+      } else {
+        organizationId = initialRow['organization_id']?.toString() ?? '';
+        organizationName = initialRow['organization_name']?.toString() ?? '';
+        organizationNumber =
+            initialRow['organization_number']?.toString() ?? '';
+      }
+
+      name = initialRow['name']?.toString() ?? '';
+      address = initialRow['address']?.toString() ?? '';
+      address2 = initialRow['address_2']?.toString() ?? '';
+      city = initialRow['city']?.toString() ?? '';
+      state = initialRow['state']?.toString() ?? '';
+      zip = initialRow['zip']?.toString() ?? '';
+      phone = _formatPhoneNumber(
+        initialRow['phone']?.toString() ??
+            initialRow['phone_number']?.toString() ??
+            '',
+      );
+      terminalLicenses = initialRow['terminal_licenses']?.toString() ?? '';
+      terminalsActive = initialRow['terminals_active']?.toString() ?? '';
+    } else {
+      final activeContext = LicenseService().activeContext;
+      final activeOrganizationId = activeContext?.organizationId ?? '';
+      final activeOrganizationNumber = activeContext?.organizationNumber ?? '';
+
+      if (activeOrganizationId.isNotEmpty) {
+        organizationId = activeOrganizationId;
+      }
+
+      if (activeOrganizationNumber.isNotEmpty) {
+        organizationNumber = activeOrganizationNumber;
+      } else {
+        final defaultOrganizationNumber = await _settingsDataService
+            .getDefaultOrganizationNumber();
+        if (!mounted) return null;
+        organizationNumber = defaultOrganizationNumber ?? '';
+      }
+
+      final orgDetails = await _settingsDataService
+          .getOrganizationDetailsByNumber(organizationNumber.trim());
+      if (!mounted) return null;
+
+      final resolvedOrganizationId = (orgDetails['id'] ?? '').trim();
+      final resolvedOrganizationName = (orgDetails['name'] ?? '').trim();
+
+      if (resolvedOrganizationId.isNotEmpty) {
+        organizationId = resolvedOrganizationId;
+      }
+      if (resolvedOrganizationName.isNotEmpty) {
+        organizationName = resolvedOrganizationName;
+      }
+
+      terminalLicenses = '1';
+      terminalsActive = '0';
+    }
+
+    return _showLocationFormDialog(
+      initialRow: initialRow,
+      organizationId: organizationId,
+      organizationName: organizationName,
+      organizationNumber: organizationNumber,
+      name: name,
+      address: address,
+      address2: address2,
+      city: city,
+      state: state,
+      zip: zip,
+      phone: phone,
+      terminalLicenses: terminalLicenses,
+      terminalsActive: terminalsActive,
+    );
   }
 
   Future<Map<String, String>?> _openOrganizationForm({
@@ -3050,6 +2173,26 @@ class _TableListWindowState extends State<TableListWindow> {
     final licenseKeyController = TextEditingController(
       text: initialRow?['license_key']?.toString() ?? '',
     );
+    final autoCloseTimeController = TextEditingController(
+      text: _normalizeTimeForInput(initialRow?['auto_close_batch_time']),
+    );
+    var autoCloseEnabled = _asBool(
+      initialRow?['auto_close_batch_enabled'],
+      defaultValue: false,
+    );
+
+    if (isEditing) {
+      final orgNumber = orgNumberController.text.trim();
+      if (orgNumber.isNotEmpty) {
+        final latest = await _settingsDataService
+            .getOrganizationAutoCloseFormValuesByNumber(orgNumber);
+        if (!mounted) return null;
+        if (latest != null) {
+          autoCloseEnabled = latest.enabled;
+          autoCloseTimeController.text = latest.time24h;
+        }
+      }
+    }
 
     final result = await showDialog<Map<String, String>>(
       context: context,
@@ -3084,6 +2227,30 @@ class _TableListWindowState extends State<TableListWindow> {
                     readOnly: isEditing,
                     decoration: const InputDecoration(labelText: 'License Key'),
                   ),
+                  const SizedBox(height: 10),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Auto-close batch enabled'),
+                    value: autoCloseEnabled,
+                    onChanged: (value) {
+                      setDialogState(() {
+                        autoCloseEnabled = value;
+                        if (!value) autoCloseTimeController.clear();
+                      });
+                    },
+                  ),
+                  TextField(
+                    controller: autoCloseTimeController,
+                    enabled: autoCloseEnabled,
+                    inputFormatters: [
+                      FilteringTextInputFormatter.allow(RegExp(r'[0-9:]')),
+                      LengthLimitingTextInputFormatter(8),
+                    ],
+                    decoration: const InputDecoration(
+                      labelText: 'Auto-close time (24h)',
+                      hintText: 'HH:mm or HH:mm:ss',
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -3095,10 +2262,25 @@ class _TableListWindowState extends State<TableListWindow> {
             ),
             ElevatedButton(
               onPressed: () {
+                final rawTime = autoCloseTimeController.text.trim();
+                if (autoCloseEnabled) {
+                  final valid = RegExp(
+                    r'^(\d{1,2}):(\d{2})(?::\d{2})?$',
+                  ).hasMatch(rawTime);
+                  if (!valid) {
+                    _showErrorSnackBar(
+                      'Auto-close time must be HH:mm or HH:mm:ss in 24-hour format.',
+                    );
+                    return;
+                  }
+                }
+
                 Navigator.pop(dialogContext, {
                   'organizationNumber': orgNumberController.text.trim(),
                   'name': nameController.text.trim(),
                   'licenseKey': licenseKeyController.text.trim(),
+                  'autoCloseBatchEnabled': autoCloseEnabled ? 'true' : 'false',
+                  'autoCloseBatchTime': rawTime,
                 });
               },
               child: const Text('Save'),
@@ -3111,6 +2293,7 @@ class _TableListWindowState extends State<TableListWindow> {
     orgNumberController.dispose();
     nameController.dispose();
     licenseKeyController.dispose();
+    autoCloseTimeController.dispose();
     return result;
   }
 
@@ -3126,6 +2309,10 @@ class _TableListWindowState extends State<TableListWindow> {
           organizationNumber: formValues['organizationNumber'] ?? '',
           name: formValues['name'] ?? '',
           licenseKey: formValues['licenseKey'] ?? '',
+          autoCloseBatchEnabled:
+              (formValues['autoCloseBatchEnabled'] ?? '').toLowerCase() ==
+              'true',
+          autoCloseBatchTime: formValues['autoCloseBatchTime'] ?? '',
         );
         if (!mounted) return;
         _refresh();
@@ -3155,18 +2342,6 @@ class _TableListWindowState extends State<TableListWindow> {
           phone: formValues['phone'] ?? '',
           terminalLicenses: int.tryParse(formValues['terminalLicenses'] ?? ''),
           terminalsActive: int.tryParse(formValues['terminalsActive'] ?? ''),
-          allowTipAdjustments:
-              (formValues['allowTipAdjustments'] ?? '').toLowerCase() == 'true',
-          printTipSuggestions:
-              (formValues['printTipSuggestions'] ?? '').toLowerCase() == 'true',
-          tipSuggestion1Pct: formValues['tipSuggestion1Pct'] ?? '18',
-          tipSuggestion2Pct: formValues['tipSuggestion2Pct'] ?? '20',
-          tipSuggestion3Pct: formValues['tipSuggestion3Pct'] ?? '25',
-          tipSuggestionBase: formValues['tipSuggestionBase'] ?? 'subtotal',
-          receiptCardSignatureMessage:
-              formValues['receiptCardSignatureMessage'] ?? '',
-          receiptMiscMessage: formValues['receiptMiscMessage'] ?? '',
-          receiptReplyToEmail: formValues['receiptReplyToEmail'] ?? '',
         );
         if (!mounted) return;
         _showInfoSnackBarWithMessenger(messenger, 'Location saved.');
@@ -3181,10 +2356,30 @@ class _TableListWindowState extends State<TableListWindow> {
     }
 
     if (widget.tableName == 'staff') {
-      _showInfoSnackBarWithMessenger(
-        messenger,
-        'Use Staff Management.',
-      );
+      final formValues = await _openStaffForm();
+      if (formValues == null) return;
+
+      try {
+        await _settingsDataService.insertStaffForm(
+          organizationId: formValues['organizationId']?.toString() ?? '',
+          locationId: formValues['locationId']?.toString() ?? '',
+          firstName: formValues['firstName']?.toString() ?? '',
+          lastName: formValues['lastName']?.toString() ?? '',
+          email: formValues['email']?.toString() ?? '',
+          phone: formValues['phone']?.toString() ?? '',
+          pin: formValues['pin']?.toString() ?? '',
+          role: formValues['role']?.toString() ?? 'cashier',
+          isActive: formValues['isActive'] as bool? ?? true,
+        );
+        if (!mounted) return;
+        _showInfoSnackBarWithMessenger(messenger, 'Staff saved.');
+        _refresh();
+      } catch (error) {
+        _showErrorSnackBarWithMessenger(
+          messenger,
+          'Add Staff failed: ${_userFacingError(error)}',
+        );
+      }
       return;
     }
 
@@ -3198,15 +2393,7 @@ class _TableListWindowState extends State<TableListWindow> {
           terminalNumber: formValues['terminalNumber']?.toString() ?? '',
           name: formValues['name']?.toString() ?? '',
           code: formValues['code']?.toString() ?? '',
-          cardReaderType: formValues['cardReaderType']?.toString() ?? '',
-          cardReaderHppAuthToken:
-              formValues['cardReaderHppAuthToken']?.toString() ?? '',
           isActive: formValues['isActive'] as bool? ?? true,
-          receiptPrinterName:
-              formValues['receiptPrinterName']?.toString() ?? '',
-          autoCloseBatchEnabled:
-              formValues['autoCloseBatchEnabled'] as bool?,
-          autoCloseBatchTime: formValues['autoCloseBatchTime']?.toString(),
         );
         if (!mounted) return;
         _showInfoSnackBarWithMessenger(messenger, 'Terminal saved.');
@@ -3257,6 +2444,10 @@ class _TableListWindowState extends State<TableListWindow> {
           organizationNumber: formValues['organizationNumber'] ?? '',
           name: formValues['name'] ?? '',
           licenseKey: formValues['licenseKey'] ?? '',
+          autoCloseBatchEnabled:
+              (formValues['autoCloseBatchEnabled'] ?? '').toLowerCase() ==
+              'true',
+          autoCloseBatchTime: formValues['autoCloseBatchTime'] ?? '',
         );
         if (!mounted) return;
         _refresh();
@@ -3274,8 +2465,6 @@ class _TableListWindowState extends State<TableListWindow> {
       if (formValues == null) return;
 
       try {
-        final expectedAllowTipAdjustments =
-            (formValues['allowTipAdjustments'] ?? '').toLowerCase() == 'true';
         await _settingsDataService.updateLocationForm(
           id: id,
           organizationId: formValues['organizationId'] ?? '',
@@ -3289,28 +2478,8 @@ class _TableListWindowState extends State<TableListWindow> {
           phone: formValues['phone'] ?? '',
           terminalLicenses: int.tryParse(formValues['terminalLicenses'] ?? ''),
           terminalsActive: int.tryParse(formValues['terminalsActive'] ?? ''),
-          allowTipAdjustments:
-              (formValues['allowTipAdjustments'] ?? '').toLowerCase() == 'true',
-          printTipSuggestions:
-              (formValues['printTipSuggestions'] ?? '').toLowerCase() == 'true',
-          tipSuggestion1Pct: formValues['tipSuggestion1Pct'] ?? '18',
-          tipSuggestion2Pct: formValues['tipSuggestion2Pct'] ?? '20',
-          tipSuggestion3Pct: formValues['tipSuggestion3Pct'] ?? '25',
-          tipSuggestionBase: formValues['tipSuggestionBase'] ?? 'subtotal',
-          receiptCardSignatureMessage:
-              formValues['receiptCardSignatureMessage'] ?? '',
-          receiptMiscMessage: formValues['receiptMiscMessage'] ?? '',
-          receiptReplyToEmail: formValues['receiptReplyToEmail'] ?? '',
         );
         if (!mounted) return;
-
-        _locationTipAdjustmentsCache[id.toString()] =
-            expectedAllowTipAdjustments;
-        _showInfoSnackBarWithMessenger(
-          messenger,
-          'Location updated. Allow Tip Adjustments: '
-          '${expectedAllowTipAdjustments ? 'ON' : 'OFF'}.',
-        );
         _refresh();
       } catch (error) {
         _showErrorSnackBarWithMessenger(
@@ -3322,10 +2491,31 @@ class _TableListWindowState extends State<TableListWindow> {
     }
 
     if (widget.tableName == 'staff') {
-      _showInfoSnackBarWithMessenger(
-        messenger,
-        'Use Staff Management.',
-      );
+      final formValues = await _openStaffForm(initialRow: row);
+      if (formValues == null) return;
+
+      try {
+        await _settingsDataService.updateStaffForm(
+          id: id,
+          organizationId: formValues['organizationId']?.toString() ?? '',
+          locationId: formValues['locationId']?.toString() ?? '',
+          firstName: formValues['firstName']?.toString() ?? '',
+          lastName: formValues['lastName']?.toString() ?? '',
+          email: formValues['email']?.toString() ?? '',
+          phone: formValues['phone']?.toString() ?? '',
+          pin: formValues['pin']?.toString() ?? '',
+          role: formValues['role']?.toString() ?? 'cashier',
+          isActive: formValues['isActive'] as bool? ?? true,
+        );
+        if (!mounted) return;
+        _showInfoSnackBarWithMessenger(messenger, 'Staff updated.');
+        _refresh();
+      } catch (error) {
+        _showErrorSnackBarWithMessenger(
+          messenger,
+          'Update failed: ${_userFacingError(error)}',
+        );
+      }
       return;
     }
 
@@ -3340,15 +2530,7 @@ class _TableListWindowState extends State<TableListWindow> {
           terminalNumber: formValues['terminalNumber']?.toString() ?? '',
           name: formValues['name']?.toString() ?? '',
           code: formValues['code']?.toString() ?? '',
-          cardReaderType: formValues['cardReaderType']?.toString() ?? '',
-          cardReaderHppAuthToken:
-              formValues['cardReaderHppAuthToken']?.toString() ?? '',
           isActive: formValues['isActive'] as bool? ?? true,
-          receiptPrinterName:
-              formValues['receiptPrinterName']?.toString() ?? '',
-          autoCloseBatchEnabled:
-              formValues['autoCloseBatchEnabled'] as bool?,
-          autoCloseBatchTime: formValues['autoCloseBatchTime']?.toString(),
         );
         if (!mounted) return;
         _showInfoSnackBarWithMessenger(messenger, 'Terminal updated.');
@@ -3388,6 +2570,8 @@ class _TableListWindowState extends State<TableListWindow> {
   }
 
   Future<void> _deleteRow(Map<String, dynamic> row) async {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+
     if (widget.tableName == 'organizations') {
       _showErrorSnackBar('Organizations cannot be deleted.');
       return;
@@ -3407,8 +2591,25 @@ class _TableListWindowState extends State<TableListWindow> {
     }
 
     if (widget.tableName == 'locations') {
-      _showErrorSnackBar('Locations cannot be deleted from this screen.');
-      return;
+      try {
+        final hasDependencies = await _settingsDataService
+            .locationHasDependencies(id.toString());
+        if (!mounted) return;
+
+        if (hasDependencies) {
+          _showErrorSnackBarWithMessenger(
+            messenger,
+            'Cannot delete location with associated terminals or staff.',
+          );
+          return;
+        }
+      } catch (error) {
+        _showErrorSnackBarWithMessenger(
+          messenger,
+          'Unable to validate location delete: ${_userFacingError(error)}',
+        );
+        return;
+      }
     }
 
     if (!mounted) return;
@@ -3428,6 +2629,10 @@ class _TableListWindowState extends State<TableListWindow> {
                   : widget.title,
             ),
           ),
+          if (widget.tableName == 'locations')
+            TextButton(onPressed: _addRow, child: const Text('Add Location')),
+          if (widget.tableName == 'staff')
+            TextButton(onPressed: _addRow, child: const Text('Add Staff')),
           if (widget.tableName == 'terminals')
             TextButton(onPressed: _addRow, child: const Text('Add Terminal')),
           if (widget.tableName != 'organizations' &&
@@ -3492,9 +2697,7 @@ class _TableListWindowState extends State<TableListWindow> {
             }
 
             if (widget.tableName == 'staff') {
-              return const Center(
-                child: Text('Use Staff Management.'),
-              );
+              return _buildStaffTable(rows);
             }
 
             if (widget.tableName == 'terminals') {

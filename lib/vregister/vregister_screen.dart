@@ -50,6 +50,10 @@ class VRegisterScreen extends StatefulWidget {
 
 class _VRegisterScreenState extends State<VRegisterScreen> {
   static const bool _showTemporaryRefundVerification = true;
+  static const String _paymentApiBaseUrl = String.fromEnvironment(
+    'PAYMENT_API_BASE_URL',
+    defaultValue: 'http://127.0.0.1:3000',
+  );
   static const bool _forceFirstStartOfDayWarmup = bool.fromEnvironment(
     'FORCE_FIRST_START_OF_DAY_WARMUP',
     defaultValue: false,
@@ -11610,6 +11614,126 @@ class _VRegisterScreenState extends State<VRegisterScreen> {
           Navigator.of(dialogContext).pop();
           unawaited(_openTableListWindow(tableName, title));
         },
+        onShowPaymentDiagnostics: () {
+          Navigator.of(dialogContext).pop();
+          unawaited(_showPaymentDiagnosticsDialog());
+        },
+      ),
+    );
+  }
+
+  String _maskDiagnosticValue(String value, {int head = 4, int tail = 2}) {
+    final normalized = value.trim();
+    if (normalized.isEmpty) return '';
+    if (normalized.length <= head + tail) {
+      return '${normalized.substring(0, 1)}***';
+    }
+    return '${normalized.substring(0, head)}***${normalized.substring(normalized.length - tail)}';
+  }
+
+  Future<void> _showPaymentDiagnosticsDialog() async {
+    if (!mounted) return;
+
+    final activeContext = LicenseService().activeContext;
+    final rows = <MapEntry<String, String>>[
+      MapEntry('captured_at', DateTime.now().toIso8601String()),
+      MapEntry(
+        'payment_api_base_url',
+        _paymentApiBaseUrl.replaceAll(RegExp(r'/+$'), ''),
+      ),
+      MapEntry('supabase_url', SupabaseConfig.url),
+      MapEntry('spin_sandbox', SupabaseConfig.spinSandbox.toString()),
+      MapEntry('debug_mode', SupabaseConfig.debugMode.toString()),
+      MapEntry('organization_id', activeContext?.organizationId ?? ''),
+      MapEntry('organization_number', activeContext?.organizationNumber ?? ''),
+      MapEntry('organization_name', activeContext?.organizationName ?? ''),
+      MapEntry('location_id', activeContext?.locationId ?? ''),
+      MapEntry('location_name', activeContext?.locationName ?? ''),
+      MapEntry('terminal_id', activeContext?.terminalId ?? ''),
+      MapEntry('terminal_number', activeContext?.terminalNumber ?? ''),
+      MapEntry('terminal_name', activeContext?.terminalName ?? ''),
+      MapEntry('card_reader_type', TerminalConfig.cardReaderType),
+      MapEntry(
+        'has_physical_card_reader',
+        TerminalConfig.hasPhysicalCardReader.toString(),
+      ),
+      MapEntry('spin_tpn', TerminalConfig.spinTpn.trim()),
+      MapEntry(
+        'spin_auth_key',
+        TerminalConfig.spinAuthKey.trim().isEmpty
+            ? ''
+            : _maskDiagnosticValue(TerminalConfig.spinAuthKey.trim()),
+      ),
+      MapEntry(
+        'hpp_auth_token_present',
+        TerminalConfig.cardReaderHppAuthToken.trim().isNotEmpty.toString(),
+      ),
+      MapEntry(
+        'hpp_auth_token',
+        TerminalConfig.cardReaderHppAuthToken.trim().isEmpty
+            ? ''
+            : _maskDiagnosticValue(
+                TerminalConfig.cardReaderHppAuthToken.trim(),
+                head: 6,
+                tail: 4,
+              ),
+      ),
+      MapEntry(
+        'payment_configured',
+        TerminalConfig.isPaymentConfigured.toString(),
+      ),
+      MapEntry('terminal_loader_debug', TerminalConfig.lastLoadDebug),
+    ];
+
+    final copyBuffer = rows
+        .map(
+          (entry) =>
+              '${entry.key}: ${entry.value.isEmpty ? '(empty)' : entry.value}',
+        )
+        .join('\n');
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Payment Diagnostics'),
+        content: SizedBox(
+          width: 720,
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: rows
+                  .map(
+                    (entry) => Padding(
+                      padding: const EdgeInsets.only(bottom: 6),
+                      child: SelectableText(
+                        '${entry.key}: ${entry.value.isEmpty ? '(empty)' : entry.value}',
+                        style: const TextStyle(fontSize: 12, height: 1.35),
+                      ),
+                    ),
+                  )
+                  .toList(growable: false),
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              await Clipboard.setData(ClipboardData(text: copyBuffer));
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Payment diagnostics copied to clipboard.'),
+                ),
+              );
+            },
+            child: const Text('Copy'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('Close'),
+          ),
+        ],
       ),
     );
   }
@@ -14313,6 +14437,11 @@ class _VRegisterScreenState extends State<VRegisterScreen> {
             icon: Icons.settings,
             label: 'Settings',
             onPressed: _openSettingsWindow,
+          ),
+          _buildLeftMenuItem(
+            icon: Icons.health_and_safety_outlined,
+            label: 'Payment Diagnostics',
+            onPressed: _showPaymentDiagnosticsDialog,
           ),
           _buildLeftMenuItem(
             icon: Icons.lock_clock_outlined,
