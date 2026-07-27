@@ -1,9 +1,6 @@
 import 'dart:convert';
 // ignore_for_file: deprecated_member_use
 
-// ignore: avoid_web_libraries_in_flutter
-import 'dart:html' as html show AnchorElement, Blob, Url;
-
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -13,6 +10,7 @@ import '../debug/integrity_checks_screen.dart';
 import '../services/license_service.dart';
 import '../services/settings_data_service.dart';
 import '../services/transaction_flow_parameters.dart';
+import '../utils/text_file_save.dart';
 
 class SettingsWindow extends StatelessWidget {
   const SettingsWindow({
@@ -111,6 +109,8 @@ class _ReceiptOperatingParametersDialog extends StatefulWidget {
 
 class _ReceiptOperatingParametersDialogState
     extends State<_ReceiptOperatingParametersDialog> {
+  static const String _voidsRefundsIntegrityCheckKey =
+      'operating.transaction.voids_refunds_integrity_check';
   static const Map<String, String> _receiptTypes = {
     'sale': 'Sale',
     'void': 'Void',
@@ -130,6 +130,8 @@ class _ReceiptOperatingParametersDialogState
   bool _customerTrackingEnabled = false;
   bool _integrityChecksEnabled = false;
   bool _voidsRefundsIntegrityCheckEnabled = false;
+  bool _enableProcessorSurcharge = false;
+  String _receiptReplyToEmail = '';
 
   bool _loading = true;
   bool _saving = false;
@@ -169,7 +171,9 @@ class _ReceiptOperatingParametersDialogState
     _customerTrackingEnabled = txFlowParams.customerTrackingEnabled;
     _integrityChecksEnabled = txFlowParams.integrityChecksEnabled;
     _voidsRefundsIntegrityCheckEnabled =
-        txFlowParams.voidsRefundsIntegrityCheckEnabled;
+        prefs.getBool(_voidsRefundsIntegrityCheckKey) ?? false;
+    _enableProcessorSurcharge = txFlowParams.enableProcessorSurcharge;
+    _receiptReplyToEmail = txFlowParams.receiptReplyToEmail;
     for (final entry in txFlowParams.customerFieldModes.entries) {
       _customerFieldModes[entry.key] = entry.value;
     }
@@ -199,11 +203,18 @@ class _ReceiptOperatingParametersDialogState
       staffTrackingEnabled: _staffTrackingEnabled,
       customerTrackingEnabled: _customerTrackingEnabled,
       integrityChecksEnabled: _integrityChecksEnabled,
-      voidsRefundsIntegrityCheckEnabled: _voidsRefundsIntegrityCheckEnabled,
+      enableProcessorSurcharge: _enableProcessorSurcharge,
       customerFieldModes: Map<String, CustomerFieldMode>.from(
         _customerFieldModes,
       ),
+      receiptPreviewEnabled: Map<String, bool>.from(_previewEnabled),
+      receiptCopyCount: Map<String, int>.from(_copyCount),
+      receiptReplyToEmail: _receiptReplyToEmail,
     ).save();
+    await prefs.setBool(
+      _voidsRefundsIntegrityCheckKey,
+      _voidsRefundsIntegrityCheckEnabled,
+    );
 
     if (!mounted) return;
     setState(() {
@@ -1117,14 +1128,12 @@ class _TableListWindowState extends State<TableListWindow> {
   }
 
   void _downloadTextFileFromSettings(String content, String filename) {
-    if (!kIsWeb) return;
-    final anchor =
-        html.AnchorElement(
-            href: html.Url.createObjectUrl(html.Blob([content], 'text/plain')),
-          )
-          ..setAttribute('download', filename)
-          ..click();
-    html.Url.revokeObjectUrl(anchor.href ?? '');
+    saveTextFile(
+      content: content,
+      fileName: filename,
+      mimeType: 'text/plain',
+      saveToDownloads: true,
+    );
   }
 
   void _showErrorSnackBar(String message) {
@@ -2180,19 +2189,6 @@ class _TableListWindowState extends State<TableListWindow> {
       initialRow?['auto_close_batch_enabled'],
       defaultValue: false,
     );
-
-    if (isEditing) {
-      final orgNumber = orgNumberController.text.trim();
-      if (orgNumber.isNotEmpty) {
-        final latest = await _settingsDataService
-            .getOrganizationAutoCloseFormValuesByNumber(orgNumber);
-        if (!mounted) return null;
-        if (latest != null) {
-          autoCloseEnabled = latest.enabled;
-          autoCloseTimeController.text = latest.time24h;
-        }
-      }
-    }
 
     final result = await showDialog<Map<String, String>>(
       context: context,
