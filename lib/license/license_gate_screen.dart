@@ -72,7 +72,8 @@ class _LicenseGateScreenState extends State<LicenseGateScreen> {
     }
 
     if (result.requiresTerminalRegistration) {
-      _licenseController.text = result.attemptedLicenseKey ?? _licenseController.text;
+      _licenseController.text =
+          result.attemptedLicenseKey ?? _licenseController.text;
       await _handleUnregisteredTerminalFlow();
       return;
     }
@@ -223,9 +224,37 @@ class _LicenseGateScreenState extends State<LicenseGateScreen> {
 
     if (!mounted) return;
     if (!lookup.found) {
+      final backendRecognized = await _licenseService
+          .isLicenseRecognizedByBackend(input.licenseKey);
+      if (!mounted) return;
+      if (!backendRecognized) {
+        setState(() {
+          _busy = false;
+          _error = lookup.errorMessage ?? 'Organization lookup failed.';
+        });
+        return;
+      }
+
+      _licenseController.text = input.licenseKey;
+      _organizationNumberController.text = input.organizationNumber;
+      await _loadActivationOptions(force: true);
+
+      final registerResult = await _licenseService.activateLicense(
+        input.organizationNumber,
+        terminalNumber: _selectedTerminalNumber ?? '0001',
+        locationName: _selectedLocationName,
+        allowTerminalRegistration: true,
+      );
+
+      if (!mounted) return;
+      if (registerResult.success) {
+        _goToRegister();
+        return;
+      }
+
       setState(() {
         _busy = false;
-        _error = lookup.errorMessage ?? 'Organization lookup failed.';
+        _error = registerResult.errorMessage;
       });
       return;
     }
@@ -268,78 +297,79 @@ class _LicenseGateScreenState extends State<LicenseGateScreen> {
       text: _licenseController.text.trim(),
     );
 
-    final result = await showDialog<({String organizationNumber, String licenseKey})>(
-      context: context,
-      barrierDismissible: false,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Terminal Not Registered'),
-        content: SizedBox(
-          width: 460,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Enter organization number and license key to bind startup variables from Supabase and register this terminal.',
+    final result =
+        await showDialog<({String organizationNumber, String licenseKey})>(
+          context: context,
+          barrierDismissible: false,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Terminal Not Registered'),
+            content: SizedBox(
+              width: 460,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Enter organization number and license key to bind startup variables from Supabase and register this terminal.',
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: organizationController,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      labelText: 'Organization Number',
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  TextField(
+                    controller: licenseController,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      labelText: 'License Key',
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: organizationController,
-                decoration: const InputDecoration(
-                  border: OutlineInputBorder(),
-                  labelText: 'Organization Number',
-                ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext),
+                child: const Text('Cancel'),
               ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: licenseController,
-                decoration: const InputDecoration(
-                  border: OutlineInputBorder(),
-                  labelText: 'License Key',
-                ),
+              ElevatedButton(
+                onPressed: () {
+                  final organizationNumber = organizationController.text.trim();
+                  final licenseKey = licenseController.text.trim();
+                  if (organizationNumber.isEmpty || licenseKey.isEmpty) {
+                    return;
+                  }
+                  Navigator.pop(dialogContext, (
+                    organizationNumber: organizationNumber,
+                    licenseKey: licenseKey,
+                  ));
+                },
+                child: const Text('Lookup and Register'),
               ),
             ],
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              final organizationNumber = organizationController.text.trim();
-              final licenseKey = licenseController.text.trim();
-              if (organizationNumber.isEmpty || licenseKey.isEmpty) {
-                return;
-              }
-              Navigator.pop(
-                dialogContext,
-                (
-                  organizationNumber: organizationNumber,
-                  licenseKey: licenseKey,
-                ),
-              );
-            },
-            child: const Text('Lookup and Register'),
-          ),
-        ],
-      ),
-    );
+        );
 
     organizationController.dispose();
     licenseController.dispose();
     return result;
   }
 
-  Future<void> _prefillActivationOptionsFromOrganization(String organizationId) async {
+  Future<void> _prefillActivationOptionsFromOrganization(
+    String organizationId,
+  ) async {
     final locations = await _licenseService.fetchLocationsForOrganization(
       organizationId: organizationId,
     );
 
     final defineLocationName = SupabaseConfig.locationName.trim();
     String? nextLocation = _selectedLocationName;
-    if (defineLocationName.isNotEmpty && locations.contains(defineLocationName)) {
+    if (defineLocationName.isNotEmpty &&
+        locations.contains(defineLocationName)) {
       nextLocation = defineLocationName;
     } else if (nextLocation == null || !locations.contains(nextLocation)) {
       nextLocation = locations.isNotEmpty ? locations.first : null;
@@ -352,7 +382,8 @@ class _LicenseGateScreenState extends State<LicenseGateScreen> {
 
     final defineTerminalNumber = SupabaseConfig.terminalNumber.trim();
     String? nextTerminal = _selectedTerminalNumber;
-    if (defineTerminalNumber.isNotEmpty && terminals.contains(defineTerminalNumber)) {
+    if (defineTerminalNumber.isNotEmpty &&
+        terminals.contains(defineTerminalNumber)) {
       nextTerminal = defineTerminalNumber;
     } else if (nextTerminal == null || !terminals.contains(nextTerminal)) {
       nextTerminal = terminals.isNotEmpty ? terminals.first : '0001';
@@ -369,9 +400,7 @@ class _LicenseGateScreenState extends State<LicenseGateScreen> {
 
   void _goToRegister() {
     Navigator.of(context).pushReplacement(
-      MaterialPageRoute<void>(
-        builder: (_) => buildRegisterVariantScreen(),
-      ),
+      MaterialPageRoute<void>(builder: (_) => buildRegisterVariantScreen()),
     );
   }
 
@@ -544,5 +573,3 @@ class _LicenseGateScreenState extends State<LicenseGateScreen> {
     );
   }
 }
-
-

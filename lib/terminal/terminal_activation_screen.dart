@@ -11,7 +11,8 @@ class TerminalActivationScreen extends StatefulWidget {
   const TerminalActivationScreen({super.key});
 
   @override
-  State<TerminalActivationScreen> createState() => _TerminalActivationScreenState();
+  State<TerminalActivationScreen> createState() =>
+      _TerminalActivationScreenState();
 }
 
 class _TerminalActivationScreenState extends State<TerminalActivationScreen> {
@@ -19,10 +20,12 @@ class _TerminalActivationScreenState extends State<TerminalActivationScreen> {
   final TextEditingController _licenseController = TextEditingController();
   final TextEditingController _organizationNumberController =
       TextEditingController();
-  final TextEditingController _terminalNumberController = TextEditingController();
+  final TextEditingController _terminalNumberController =
+      TextEditingController();
   final TextEditingController _terminalNameController = TextEditingController();
   final TextEditingController _masterPinController = TextEditingController();
-  final TextEditingController _masterPinConfirmController = TextEditingController();
+  final TextEditingController _masterPinConfirmController =
+      TextEditingController();
   final FocusNode _licenseFocusNode = FocusNode();
   final FocusNode _organizationFocusNode = FocusNode();
   final FocusNode _terminalNumberFocusNode = FocusNode();
@@ -129,8 +132,11 @@ class _TerminalActivationScreenState extends State<TerminalActivationScreen> {
 
   void _handleIdentityFocusChange() {
     if (_busy) return;
-    if (_licenseFocusNode.hasFocus || _organizationFocusNode.hasFocus ||
-        _terminalNumberFocusNode.hasFocus) { return; }
+    if (_licenseFocusNode.hasFocus ||
+        _organizationFocusNode.hasFocus ||
+        _terminalNumberFocusNode.hasFocus) {
+      return;
+    }
     _validateEnteredIdentity();
   }
 
@@ -221,11 +227,12 @@ class _TerminalActivationScreenState extends State<TerminalActivationScreen> {
     if (_busy) return;
 
     final contextReady = await _resolveOrganizationContext(showBusy: false);
-    if (!contextReady || _organizationId.isEmpty) {
+    if (!contextReady) {
       if (!mounted) return;
       setState(() {
         _isTerminalNumberAvailable = null;
-        _terminalAvailabilityMessage = 'Enter valid organization and license first.';
+        _terminalAvailabilityMessage =
+            'Enter valid organization and license first.';
         _checkingTerminalAvailability = false;
       });
       return;
@@ -311,20 +318,48 @@ class _TerminalActivationScreenState extends State<TerminalActivationScreen> {
 
     if (!mounted) return false;
     if (!lookup.found) {
-      if (showBusy) {
+      final backendRecognized = await _licenseService
+          .isLicenseRecognizedByBackend(licenseKey);
+      if (!mounted) return false;
+      if (!backendRecognized) {
+        if (showBusy) {
+          setState(() {
+            _busy = false;
+          });
+        }
         setState(() {
-          _busy = false;
+          _setError(lookup.errorMessage ?? 'Organization lookup failed.');
         });
+        return false;
       }
+
+      final fallbackLocations = await _licenseService.fetchLocationsForLicense(
+        licenseKey,
+      );
+      if (!mounted) return false;
+
+      String? nextLocation = _selectedLocationName;
+      if (nextLocation == null || !fallbackLocations.contains(nextLocation)) {
+        nextLocation = fallbackLocations.isNotEmpty
+            ? fallbackLocations.first
+            : null;
+      }
+
       setState(() {
-        _setError(lookup.errorMessage ?? 'Organization lookup failed.');
+        _organizationId = '';
+        _availableLocations = fallbackLocations;
+        _selectedLocationName = nextLocation;
+        _showNewLocationField = fallbackLocations.isEmpty;
+        _error = null;
       });
-      return false;
+
+      return true;
     }
 
-    final locations = await _licenseService.fetchOrCreateLocationsForOrganization(
-      organizationId: lookup.organizationId,
-    );
+    final locations = await _licenseService
+        .fetchOrCreateLocationsForOrganization(
+          organizationId: lookup.organizationId,
+        );
 
     if (!mounted) return false;
     if (locations.isEmpty) {
@@ -334,7 +369,9 @@ class _TerminalActivationScreenState extends State<TerminalActivationScreen> {
         });
       }
       setState(() {
-        _setError('No locations available and default location could not be created.');
+        _setError(
+          'No locations available and default location could not be created.',
+        );
       });
       return false;
     }
@@ -355,7 +392,9 @@ class _TerminalActivationScreenState extends State<TerminalActivationScreen> {
     if (locations.isEmpty) {
       if (showBusy) setState(() => _busy = false);
       setState(() {
-        _setError('No locations found. Enter a location name below to create one.');
+        _setError(
+          'No locations found. Enter a location name below to create one.',
+        );
       });
       return false;
     }
@@ -427,7 +466,9 @@ class _TerminalActivationScreenState extends State<TerminalActivationScreen> {
     }
 
     final rawTerminalNumber = _terminalNumberController.text.trim();
-    final normalizedTerminalNumber = _normalizeTerminalNumber(rawTerminalNumber);
+    final normalizedTerminalNumber = _normalizeTerminalNumber(
+      rawTerminalNumber,
+    );
 
     if (rawTerminalNumber.isEmpty) {
       setState(() {
@@ -440,7 +481,9 @@ class _TerminalActivationScreenState extends State<TerminalActivationScreen> {
     if (normalizedTerminalNumber == null) {
       setState(() {
         _activationErrorDetails = null;
-        _setError('Terminal Number must be 1-4 digits (stored as 4 digits, e.g. 0099).');
+        _setError(
+          'Terminal Number must be 1-4 digits (stored as 4 digits, e.g. 0099).',
+        );
         _isTerminalNumberAvailable = false;
         _terminalAvailabilityMessage =
             'Terminal Number must be 1-4 digits (stored as 4 digits, e.g. 0099).';
@@ -451,7 +494,9 @@ class _TerminalActivationScreenState extends State<TerminalActivationScreen> {
     if (_terminalNumberController.text.trim() != normalizedTerminalNumber) {
       _terminalNumberController.value = TextEditingValue(
         text: normalizedTerminalNumber,
-        selection: TextSelection.collapsed(offset: normalizedTerminalNumber.length),
+        selection: TextSelection.collapsed(
+          offset: normalizedTerminalNumber.length,
+        ),
       );
     }
 
@@ -472,7 +517,9 @@ class _TerminalActivationScreenState extends State<TerminalActivationScreen> {
     if (masterPin.isEmpty) {
       setState(() {
         _activationErrorDetails = null;
-        _setError('Master PIN is required to create the default staff account.');
+        _setError(
+          'Master PIN is required to create the default staff account.',
+        );
       });
       _masterPinFocusNode.requestFocus();
       return;
@@ -548,8 +595,12 @@ class _TerminalActivationScreenState extends State<TerminalActivationScreen> {
       _activationErrorDetails = null;
     });
 
+    final activationLookupKey = _organizationId.isEmpty
+        ? _organizationNumberController.text.trim()
+        : _licenseController.text;
+
     final result = await _licenseService.activateLicense(
-      _licenseController.text,
+      activationLookupKey,
       terminalNumber: terminalNumber,
       terminalName: terminalName,
       locationName: locationNameToUse,
@@ -631,7 +682,8 @@ class _TerminalActivationScreenState extends State<TerminalActivationScreen> {
                           ),
                         ],
                       ),
-                      if (_deviceActivationLocked && _deviceActivationMessage != null) ...[
+                      if (_deviceActivationLocked &&
+                          _deviceActivationMessage != null) ...[
                         const SizedBox(height: 10),
                         Container(
                           padding: const EdgeInsets.all(10),
@@ -714,137 +766,158 @@ class _TerminalActivationScreenState extends State<TerminalActivationScreen> {
                       const SizedBox(height: 6),
                       Text(
                         'Application License Key Source: ${_licenseSourceLabel()}',
-                        style: const TextStyle(fontSize: 12, color: Colors.black54),
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.black54,
+                        ),
                       ),
-                      if (_lookingUpLicense) ...
-                        [
-                          const SizedBox(height: 8),
-                          const Row(
+                      if (_lookingUpLicense) ...[
+                        const SizedBox(height: 8),
+                        const Row(
+                          children: [
+                            SizedBox(
+                              width: 14,
+                              height: 14,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            ),
+                            SizedBox(width: 8),
+                            Text(
+                              'Looking up organization by license key...',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.black54,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ] else if (_licenseOnlyError != null) ...[
+                        const SizedBox(height: 8),
+                        Container(
+                          padding: const EdgeInsets.all(10),
+                          decoration: BoxDecoration(
+                            color: Colors.red.shade50,
+                            border: Border.all(color: Colors.red.shade200),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              SizedBox(
-                                width: 14,
-                                height: 14,
-                                child: CircularProgressIndicator(strokeWidth: 2),
-                              ),
-                              SizedBox(width: 8),
-                              Text(
-                                'Looking up organization by license key...',
-                                style: TextStyle(fontSize: 12, color: Colors.black54),
-                              ),
-                            ],
-                          ),
-                        ]
-                      else if (_licenseOnlyError != null) ...
-                        [
-                          const SizedBox(height: 8),
-                          Container(
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                              color: Colors.red.shade50,
-                              border: Border.all(color: Colors.red.shade200),
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    const Icon(Icons.error_outline,
-                                        size: 16, color: Colors.red),
-                                    const SizedBox(width: 6),
-                                    Expanded(
-                                      child: SelectableText(
-                                        _licenseOnlyError!,
-                                        style: const TextStyle(
-                                            fontSize: 12, color: Colors.red),
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 6),
-                                Align(
-                                  alignment: Alignment.centerLeft,
-                                  child: TextButton.icon(
-                                    style: TextButton.styleFrom(
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 8, vertical: 4),
-                                      minimumSize: Size.zero,
-                                      tapTargetSize:
-                                          MaterialTapTargetSize.shrinkWrap,
-                                    ),
-                                    onPressed: () async {
-                                      await _copyToClipboard(_licenseOnlyError!);
-                                    },
-                                    icon: const Icon(Icons.copy, size: 14),
-                                    label: const Text('Copy Error',
-                                        style: TextStyle(fontSize: 12)),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ]
-                      else if (_orgFieldsFromLicense != null) ...
-                        [
-                          const SizedBox(height: 8),
-                          Theme(
-                            data: Theme.of(context).copyWith(
-                              dividerColor: Colors.transparent,
-                            ),
-                            child: ExpansionTile(
-                              initiallyExpanded: true,
-                              tilePadding: EdgeInsets.zero,
-                              childrenPadding: EdgeInsets.zero,
-                              title: const Row(
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Icon(Icons.check_circle, size: 16, color: Colors.blue),
-                                  SizedBox(width: 6),
-                                  Text(
-                                    'Organization Record Fields',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w600,
-                                      color: Colors.blue,
+                                  const Icon(
+                                    Icons.error_outline,
+                                    size: 16,
+                                    color: Colors.red,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Expanded(
+                                    child: SelectableText(
+                                      _licenseOnlyError!,
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.red,
+                                      ),
                                     ),
                                   ),
                                 ],
                               ),
-                              children: [
-                                Container(
-                                  constraints: const BoxConstraints(maxHeight: 200),
-                                  decoration: BoxDecoration(
-                                    border: Border.all(color: Colors.blue.shade200),
-                                    borderRadius: BorderRadius.circular(6),
-                                    color: Colors.blue.shade50,
-                                  ),
-                                  child: SingleChildScrollView(
+                              const SizedBox(height: 6),
+                              Align(
+                                alignment: Alignment.centerLeft,
+                                child: TextButton.icon(
+                                  style: TextButton.styleFrom(
                                     padding: const EdgeInsets.symmetric(
-                                      horizontal: 10,
-                                      vertical: 6,
+                                      horizontal: 8,
+                                      vertical: 4,
                                     ),
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: _orgFieldsFromLicense!.entries
-                                          .map(
-                                            (e) => Padding(
-                                              padding: const EdgeInsets.symmetric(
-                                                vertical: 2,
-                                              ),
-                                              child: SelectableText(
-                                                '${e.key}: ${e.value}',
-                                                style: const TextStyle(fontSize: 12),
-                                              ),
-                                            ),
-                                          )
-                                          .toList(),
-                                    ),
+                                    minimumSize: Size.zero,
+                                    tapTargetSize:
+                                        MaterialTapTargetSize.shrinkWrap,
+                                  ),
+                                  onPressed: () async {
+                                    await _copyToClipboard(_licenseOnlyError!);
+                                  },
+                                  icon: const Icon(Icons.copy, size: 14),
+                                  label: const Text(
+                                    'Copy Error',
+                                    style: TextStyle(fontSize: 12),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ] else if (_orgFieldsFromLicense != null) ...[
+                        const SizedBox(height: 8),
+                        Theme(
+                          data: Theme.of(
+                            context,
+                          ).copyWith(dividerColor: Colors.transparent),
+                          child: ExpansionTile(
+                            initiallyExpanded: true,
+                            tilePadding: EdgeInsets.zero,
+                            childrenPadding: EdgeInsets.zero,
+                            title: const Row(
+                              children: [
+                                Icon(
+                                  Icons.check_circle,
+                                  size: 16,
+                                  color: Colors.blue,
+                                ),
+                                SizedBox(width: 6),
+                                Text(
+                                  'Organization Record Fields',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: Colors.blue,
                                   ),
                                 ),
                               ],
                             ),
+                            children: [
+                              Container(
+                                constraints: const BoxConstraints(
+                                  maxHeight: 200,
+                                ),
+                                decoration: BoxDecoration(
+                                  border: Border.all(
+                                    color: Colors.blue.shade200,
+                                  ),
+                                  borderRadius: BorderRadius.circular(6),
+                                  color: Colors.blue.shade50,
+                                ),
+                                child: SingleChildScrollView(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 6,
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: _orgFieldsFromLicense!.entries
+                                        .map(
+                                          (e) => Padding(
+                                            padding: const EdgeInsets.symmetric(
+                                              vertical: 2,
+                                            ),
+                                            child: SelectableText(
+                                              '${e.key}: ${e.value}',
+                                              style: const TextStyle(
+                                                fontSize: 12,
+                                              ),
+                                            ),
+                                          ),
+                                        )
+                                        .toList(),
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
+                        ),
+                      ],
                       const SizedBox(height: 10),
                       TextField(
                         controller: _organizationNumberController,
@@ -884,7 +957,10 @@ class _TerminalActivationScreenState extends State<TerminalActivationScreen> {
                             SizedBox(width: 8),
                             Text(
                               'Checking...',
-                              style: TextStyle(fontSize: 12, color: Colors.black54),
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.black54,
+                              ),
                             ),
                           ],
                         )
@@ -913,13 +989,19 @@ class _TerminalActivationScreenState extends State<TerminalActivationScreen> {
                                 padding: const EdgeInsets.all(8),
                                 decoration: BoxDecoration(
                                   color: Colors.red.shade50,
-                                  border: Border.all(color: Colors.red.shade200),
+                                  border: Border.all(
+                                    color: Colors.red.shade200,
+                                  ),
                                   borderRadius: BorderRadius.circular(6),
                                 ),
                                 child: Row(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    const Icon(Icons.error, size: 16, color: Colors.red),
+                                    const Icon(
+                                      Icons.error,
+                                      size: 16,
+                                      color: Colors.red,
+                                    ),
                                     const SizedBox(width: 6),
                                     Expanded(
                                       child: SelectableText(
@@ -940,7 +1022,7 @@ class _TerminalActivationScreenState extends State<TerminalActivationScreen> {
                                 ),
                               )),
                       const SizedBox(height: 8),
-                      if (_showNewLocationField) ...[  
+                      if (_showNewLocationField) ...[
                         Container(
                           padding: const EdgeInsets.all(10),
                           decoration: BoxDecoration(
@@ -953,7 +1035,10 @@ class _TerminalActivationScreenState extends State<TerminalActivationScreen> {
                             children: [
                               const Text(
                                 'No locations exist for this organization. Enter a name to create the first one.',
-                                style: TextStyle(fontSize: 12, color: Colors.black54),
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.black54,
+                                ),
                               ),
                               const SizedBox(height: 8),
                               TextField(
@@ -1023,7 +1108,9 @@ class _TerminalActivationScreenState extends State<TerminalActivationScreen> {
                                   child: SizedBox(
                                     height: 14,
                                     width: 14,
-                                    child: CircularProgressIndicator(strokeWidth: 2),
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
                                   ),
                                 )
                               : (_isTerminalNumberAvailable == null
@@ -1033,7 +1120,7 @@ class _TerminalActivationScreenState extends State<TerminalActivationScreen> {
                                             ? Icons.check_circle
                                             : Icons.error,
                                         color: _isTerminalNumberAvailable!
-                                          ? Colors.blue
+                                            ? Colors.blue
                                             : Colors.red,
                                       )),
                           helperText:
@@ -1044,7 +1131,8 @@ class _TerminalActivationScreenState extends State<TerminalActivationScreen> {
                       Row(
                         children: [
                           OutlinedButton(
-                            onPressed: (_busy ||
+                            onPressed:
+                                (_busy ||
                                     _checkingTerminalAvailability ||
                                     _deviceActivationLocked)
                                 ? null
@@ -1066,8 +1154,9 @@ class _TerminalActivationScreenState extends State<TerminalActivationScreen> {
                           if ((_terminalAvailabilityMessage ?? '').isNotEmpty &&
                               (_isTerminalNumberAvailable != true))
                             TextButton(
-                              onPressed: () =>
-                                  _copyToClipboard(_terminalAvailabilityMessage ?? ''),
+                              onPressed: () => _copyToClipboard(
+                                _terminalAvailabilityMessage ?? '',
+                              ),
                               child: const Text('Copy Error'),
                             ),
                         ],
@@ -1082,7 +1171,8 @@ class _TerminalActivationScreenState extends State<TerminalActivationScreen> {
                           border: OutlineInputBorder(),
                           labelText: 'Terminal Name *',
                           hintText: 'e.g. Front Desk, Drive-Through',
-                          helperText: 'Friendly label shown on receipts and reports.',
+                          helperText:
+                              'Friendly label shown on receipts and reports.',
                         ),
                       ),
                       const SizedBox(height: 10),
@@ -1101,7 +1191,8 @@ class _TerminalActivationScreenState extends State<TerminalActivationScreen> {
                           border: OutlineInputBorder(),
                           labelText: 'Master PIN *',
                           hintText: '4-6 digits',
-                          helperText: 'Sets PIN for the default owner staff account.',
+                          helperText:
+                              'Sets PIN for the default owner staff account.',
                         ),
                       ),
                       const SizedBox(height: 10),
@@ -1169,8 +1260,9 @@ class _TerminalActivationScreenState extends State<TerminalActivationScreen> {
                                 ),
                                 const SizedBox(height: 4),
                                 TextButton.icon(
-                                  onPressed: () =>
-                                      _copyToClipboard(_activationErrorDetails!),
+                                  onPressed: () => _copyToClipboard(
+                                    _activationErrorDetails!,
+                                  ),
                                   icon: const Icon(Icons.copy, size: 16),
                                   label: const Text('Copy Technical Details'),
                                 ),
@@ -1208,7 +1300,8 @@ class _TerminalActivationScreenState extends State<TerminalActivationScreen> {
                               Row(
                                 children: [
                                   TextButton.icon(
-                                    onPressed: () => _copyToClipboard(_stickyError!),
+                                    onPressed: () =>
+                                        _copyToClipboard(_stickyError!),
                                     icon: const Icon(Icons.copy, size: 16),
                                     label: const Text('Copy Error'),
                                   ),
@@ -1230,8 +1323,8 @@ class _TerminalActivationScreenState extends State<TerminalActivationScreen> {
                       const SizedBox(height: 12),
                       ElevatedButton(
                         onPressed: (_busy || _deviceActivationLocked)
-                          ? null
-                          : _activate,
+                            ? null
+                            : _activate,
                         child: _busy
                             ? const SizedBox(
                                 width: 18,

@@ -50,7 +50,8 @@ begin
   select o.id
   into v_org_id
   from public.organizations o
-  where o.license_key = v_license_key
+    where lower(regexp_replace(coalesce(o.license_key, ''), '[^a-z0-9]', '', 'g')) =
+      lower(regexp_replace(v_license_key, '[^a-z0-9]', '', 'g'))
      or o.organization_number = v_license_key
   limit 1;
 

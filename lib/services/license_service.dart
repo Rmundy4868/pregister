@@ -132,6 +132,45 @@ class LicenseService {
     return value.trim().toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
   }
 
+  List<String> _licenseCandidatesFromOrganization(
+    Map<String, dynamic> organization,
+  ) {
+    return [
+      organization['license_key']?.toString().trim() ?? '',
+      organization['application_license_key']?.toString().trim() ?? '',
+      organization['application_license_number']?.toString().trim() ?? '',
+      organization['license_number']?.toString().trim() ?? '',
+      organization['organization_number']?.toString().trim() ?? '',
+    ].where((value) => value.isNotEmpty).toList();
+  }
+
+  bool _licenseValueMatchesInput(String input, String candidate) {
+    final normalizedInput = input.trim();
+    final normalizedCandidate = candidate.trim();
+    if (normalizedInput.isEmpty || normalizedCandidate.isEmpty) return false;
+    if (normalizedCandidate.toLowerCase() == normalizedInput.toLowerCase()) {
+      return true;
+    }
+    return _canonicalLicenseValue(normalizedCandidate) ==
+        _canonicalLicenseValue(normalizedInput);
+  }
+
+  List<String> _backendLicenseProbeCandidates(String rawLicenseKey) {
+    final normalized = rawLicenseKey.trim();
+    if (normalized.isEmpty) return const [];
+
+    final canonical = _canonicalLicenseValue(normalized);
+    final candidates = <String>{
+      normalized,
+      normalized.toUpperCase(),
+      normalized.toLowerCase(),
+      canonical,
+      if (RegExp(r'^[0-9]{6}$').hasMatch(canonical)) canonical,
+    };
+
+    return candidates.where((value) => value.trim().isNotEmpty).toList();
+  }
+
   Future<List<Map<String, dynamic>>> _fetchOrganizationsForLookup() async {
     try {
       final rpcRows = await SupabaseService.client.rpc(
@@ -744,7 +783,6 @@ class LicenseService {
   }) async {
     final normalizedOrganizationNumber = organizationNumber.trim();
     final normalizedLicenseKey = licenseKey.trim();
-    final normalizedLicenseKeyLower = normalizedLicenseKey.toLowerCase();
 
     if (normalizedOrganizationNumber.isEmpty || normalizedLicenseKey.isEmpty) {
       return const OrganizationLookupResult(
@@ -772,18 +810,9 @@ class LicenseService {
       }
 
       final organization = Map<String, dynamic>.from(rows.first as Map);
-      final candidates = [
-        organization['license_key']?.toString().trim(),
-        organization['application_license_key']?.toString().trim(),
-        organization['application_license_number']?.toString().trim(),
-        organization['license_number']?.toString().trim(),
-        organization['organization_number']?.toString().trim(),
-      ];
+      final candidates = _licenseCandidatesFromOrganization(organization);
       final matchesLicense = candidates.any(
-        (value) =>
-            value != null &&
-            value.isNotEmpty &&
-            value.toLowerCase() == normalizedLicenseKeyLower,
+        (value) => _licenseValueMatchesInput(normalizedLicenseKey, value),
       );
 
       if (!matchesLicense) {
@@ -812,8 +841,6 @@ class LicenseService {
     required String licenseKey,
   }) async {
     final normalized = licenseKey.trim();
-    final normalizedLower = normalized.toLowerCase();
-    final canonicalInput = _canonicalLicenseValue(normalized);
     if (normalized.isEmpty) {
       return const OrganizationFieldsResult(
         found: false,
@@ -824,18 +851,9 @@ class LicenseService {
       final rows = await _fetchOrganizationsForLookup();
 
       final match = rows.where((org) {
-        final candidates = [
-          org['license_key']?.toString().trim(),
-          org['application_license_key']?.toString().trim(),
-          org['application_license_number']?.toString().trim(),
-          org['license_number']?.toString().trim(),
-        ];
+        final candidates = _licenseCandidatesFromOrganization(org);
         return candidates.any(
-          (v) =>
-              v != null &&
-              v.isNotEmpty &&
-              (v.toLowerCase() == normalizedLower ||
-                  _canonicalLicenseValue(v) == canonicalInput),
+          (value) => _licenseValueMatchesInput(normalized, value),
         );
       }).firstOrNull;
 
@@ -881,45 +899,97 @@ class LicenseService {
     final normalized = licenseKey.trim();
     if (normalized.isEmpty) return false;
 
+    final probeCandidates = _backendLicenseProbeCandidates(normalized);
+    var sawInvalidLicenseResponse = false;
+
+    for (final candidate in probeCandidates) {
+      try {
+        final response = await SupabaseService.client.rpc(
+          'list_locations_for_license',
+          params: {'p_license_key': candidate},
+        );
+        if (response is List && response.isNotEmpty) {
+          return true;
+        }
+      } catch (_) {
+        // Fall through to activation probe for older/missing lookup RPCs.
+      }
+
+      try {
+        final response = await SupabaseService.client.rpc(
+          'activate_install_license',
+          params: {
+            'p_license_key': candidate,
+            'p_terminal_number': '0001',
+            'p_location_name': '',
+            'p_allow_register': false,
+          },
+        );
+        if (response is List && response.isNotEmpty) {
+          return true;
+        }
+      } catch (error) {
+        final text = error.toString().toLowerCase();
+        if (text.contains('no terminal is registered to this device') ||
+            text.contains('terminal is not registered') ||
+            text.contains('terminal 0001 is inactive') ||
+            text.contains('is inactive')) {
+          return true;
+        }
+        if (text.contains('invalid license key')) {
+          sawInvalidLicenseResponse = true;
+        }
+      }
+    }
+
+    if (sawInvalidLicenseResponse) return false;
+    return false;
+  }
+
+  Future<bool> isLicenseRecognizedByBackend(String licenseKey) {
+    return _isLicenseRecognizedByBackend(licenseKey);
+  }
+
+  Future<String> _resolvePreferredLicenseKeyForRpc(String rawLicenseKey) async {
+    final normalized = rawLicenseKey.trim();
+    if (normalized.isEmpty) return normalized;
+
     try {
-      final response = await SupabaseService.client.rpc(
-        'list_locations_for_license',
-        params: {'p_license_key': normalized},
-      );
-      if (response is List && response.isNotEmpty) {
-        return true;
+      final rows = await _fetchOrganizationsForLookup();
+      final match = rows.where((org) {
+        final candidates = _licenseCandidatesFromOrganization(org);
+        return candidates.any(
+          (value) => _licenseValueMatchesInput(normalized, value),
+        );
+      }).firstOrNull;
+
+      if (match != null) {
+        final preferred =
+            (match['license_key']?.toString().trim() ?? '').isNotEmpty
+            ? match['license_key']!.toString().trim()
+            : (match['organization_number']?.toString().trim() ?? '');
+        if (preferred.isNotEmpty) return preferred;
       }
     } catch (_) {
-      // Fall through to activation probe for older/missing lookup RPCs.
+      // Continue to RPC probes below.
     }
 
-    try {
-      final response = await SupabaseService.client.rpc(
-        'activate_install_license',
-        params: {
-          'p_license_key': normalized,
-          'p_terminal_number': '0001',
-          'p_location_name': '',
-          'p_allow_register': false,
-        },
-      );
-      if (response is List && response.isNotEmpty) {
-        return true;
-      }
-    } catch (error) {
-      final text = error.toString().toLowerCase();
-      if (text.contains('no terminal is registered to this device') ||
-          text.contains('terminal is not registered') ||
-          text.contains('terminal 0001 is inactive') ||
-          text.contains('is inactive')) {
-        return true;
-      }
-      if (text.contains('invalid license key')) {
-        return false;
+    final probeCandidates = _backendLicenseProbeCandidates(normalized);
+    for (final candidate in probeCandidates) {
+      try {
+        final response = await SupabaseService.client.rpc(
+          'list_locations_for_license',
+          params: {'p_license_key': candidate},
+        );
+        if (response is List && response.isNotEmpty) {
+          return candidate;
+        }
+      } catch (_) {
+        // Keep probing candidates; fallback to original input below.
       }
     }
 
-    return false;
+    return normalized;
   }
 
   Future<void> _ensureDefaultsForSelectors({
@@ -1099,12 +1169,14 @@ class LicenseService {
       );
     }
 
+    final rpcLicenseKey = await _resolvePreferredLicenseKeyForRpc(licenseKey);
+
     final deviceId = await getOrCreateDeviceId();
     final deviceLabel = await getOrCreateDeviceLabel();
 
     try {
       final rpcResult = await _activateViaRpc(
-        licenseKey: licenseKey,
+        licenseKey: rpcLicenseKey,
         terminalNumber: resolvedTerminalNumber,
         terminalName: (terminalName ?? '').trim(),
         locationName: resolvedLocationName,
@@ -1114,7 +1186,7 @@ class LicenseService {
         allowTerminalRegistration: allowTerminalRegistration,
       );
       if (rpcResult.context != null) {
-        await _storeLicenseKey(licenseKey);
+        await _storeLicenseKey(rpcLicenseKey);
         await _storeTerminalNumber(rpcResult.context!.terminalNumber);
         await _storeLocationName(rpcResult.context!.locationName);
         // Persist payment credentials so they survive page reloads
@@ -1139,7 +1211,7 @@ class LicenseService {
         return LicenseActivationResult(
           success: true,
           context: _activeContext,
-          attemptedLicenseKey: licenseKey,
+          attemptedLicenseKey: rpcLicenseKey,
           attemptedTerminalNumber: resolvedTerminalNumber,
           attemptedLocationName: resolvedLocationName,
           requiresTerminalRegistration: false,
@@ -1165,7 +1237,7 @@ class LicenseService {
       LicenseActivationResult legacyResult;
       try {
         legacyResult = await _activateViaDirectTables(
-          licenseKey: licenseKey,
+          licenseKey: rpcLicenseKey,
           terminalNumber: resolvedTerminalNumber,
           locationName: resolvedLocationName,
           deviceId: deviceId,
@@ -1200,7 +1272,7 @@ class LicenseService {
       }
 
       if (legacyResult.success) {
-        await _storeLicenseKey(licenseKey);
+        await _storeLicenseKey(rpcLicenseKey);
         await _storeTerminalNumber(
           legacyResult.context?.terminalNumber ?? resolvedTerminalNumber,
         );
