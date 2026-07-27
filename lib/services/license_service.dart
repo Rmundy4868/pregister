@@ -155,16 +155,28 @@ class LicenseService {
         _canonicalLicenseValue(normalizedInput);
   }
 
+  String? _extractLikelyOrganizationNumber(String rawLicenseKey) {
+    final canonical = _canonicalLicenseValue(rawLicenseKey);
+    final match = RegExp(r'([0-9]{6})').firstMatch(canonical);
+    return match?.group(1);
+  }
+
   List<String> _backendLicenseProbeCandidates(String rawLicenseKey) {
     final normalized = rawLicenseKey.trim();
     if (normalized.isEmpty) return const [];
 
     final canonical = _canonicalLicenseValue(normalized);
+    final inferredOrganizationNumber = _extractLikelyOrganizationNumber(
+      normalized,
+    );
     final candidates = <String>{
       normalized,
       normalized.toUpperCase(),
       normalized.toLowerCase(),
       canonical,
+      ...?(inferredOrganizationNumber == null
+          ? null
+          : [inferredOrganizationNumber]),
       if (RegExp(r'^[0-9]{6}$').hasMatch(canonical)) canonical,
     };
 
@@ -863,8 +875,11 @@ class LicenseService {
         );
         if (backendRecognized) {
           final fields = <String, String>{};
-          if (RegExp(r'^[0-9]{6}$').hasMatch(normalized)) {
-            fields['organization_number'] = normalized;
+          final inferredOrganizationNumber = _extractLikelyOrganizationNumber(
+            normalized,
+          );
+          if (inferredOrganizationNumber != null) {
+            fields['organization_number'] = inferredOrganizationNumber;
           }
           return OrganizationFieldsResult(
             found: fields.isNotEmpty,
